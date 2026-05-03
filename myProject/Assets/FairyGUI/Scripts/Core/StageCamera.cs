@@ -16,6 +16,13 @@ namespace FairyGUI
         public bool constantSize = true;
 
         /// <summary>
+        /// 若为 true，运行模式下不再根据分辨率改写本物体的 localPosition（仍可手动摆放或由父节点带动）。
+        /// 关闭时保持 FairyGUI 默认：每次分辨率变化会设置相机位置以对齐舞台坐标。
+        /// </summary>
+        [SerializeField]
+        bool lockLocalPositionInPlayMode;
+
+        /// <summary>
         /// 
         /// </summary>
         [NonSerialized]
@@ -112,7 +119,8 @@ namespace FairyGUI
                 unitsPerPixel = DefaultUnitsPerPixel;
                 cachedCamera.orthographicSize = screenHeight / 2 * unitsPerPixel;
             }
-            cachedTransform.localPosition = new Vector3(cachedCamera.orthographicSize * screenWidth / screenHeight, -cachedCamera.orthographicSize);
+            if (!(Application.isPlaying && lockLocalPositionInPlayMode))
+                cachedTransform.localPosition = new Vector3(cachedCamera.orthographicSize * screenWidth / screenHeight, -cachedCamera.orthographicSize);
 
             if (isMain)
             {

@@ -21,7 +21,7 @@ namespace VitaMj.MatchGame
     /// 分层矩形盘：底层 rows×cols，上一层 (rows-1)×(cols-1)，直至堆满（最多 min(rows,cols) 层，顶层可能为 1×k 或 k×1）。
     /// 上层每个格子对应下层一个 2×2 区域。下层格可点当且仅当压住它的上层格均已消除；先后点两格，数字相同则消除。
     /// </summary>
-    public sealed class LayeredPairMatchGame
+    public sealed class LayeredPairMatchGame : IPairMatchGame
     {
         readonly List<LayeredGridCell> _cells = new List<LayeredGridCell>();
         readonly Dictionary<(int layer, int row, int col), LayeredGridCell> _cellAt = new Dictionary<(int layer, int row, int col), LayeredGridCell>();
@@ -115,6 +115,7 @@ namespace VitaMj.MatchGame
                     for (int c = 0; c < w; c++)
                     {
                         var cell = new LayeredGridCell(id++, layer, r, c);
+                        cell.UseDesignerCoordinates = false;
                         _cells.Add(cell);
                         _cellAt[(layer, r, c)] = cell;
                     }
@@ -201,54 +202,11 @@ namespace VitaMj.MatchGame
             return _cells[id];
         }
 
-        public bool CanClick(int cellId)
-        {
-            if ((uint)cellId >= (uint)_cells.Count) return false;
-            var cell = _cells[cellId];
-            if (cell.Eliminated) return false;
-
-            for (int i = 0; i < cell.BlockerIds.Length; i++)
-            {
-                var b = _cells[cell.BlockerIds[i]];
-                if (!b.Eliminated) return false;
-            }
-
-            return true;
-        }
+        public bool CanClick(int cellId) =>
+            PairMatchRules.CanClick(_cells, cellId);
 
         /// <summary>尝试点击一格：第一次选中，第二次比对数字。</summary>
-        public LayeredMatchClickResult TryClick(int cellId)
-        {
-            if ((uint)cellId >= (uint)_cells.Count)
-                return LayeredMatchClickResult.Invalid;
-
-            var cell = _cells[cellId];
-            if (!CanClick(cellId))
-                return LayeredMatchClickResult.Invalid;
-
-            if (!_selectedId.HasValue)
-            {
-                _selectedId = cellId;
-                return LayeredMatchClickResult.SelectedFirst;
-            }
-
-            if (_selectedId.Value == cellId)
-            {
-                _selectedId = null;
-                return LayeredMatchClickResult.Deselected;
-            }
-
-            var first = _cells[_selectedId.Value];
-            _selectedId = null;
-
-            if (first.Value == cell.Value)
-            {
-                first.Eliminated = true;
-                cell.Eliminated = true;
-                return LayeredMatchClickResult.MatchedPair;
-            }
-
-            return LayeredMatchClickResult.MismatchedPair;
-        }
+        public LayeredMatchClickResult TryClick(int cellId) =>
+            PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
     }
 }
