@@ -4,7 +4,9 @@ using VitaMj.MatchGame;
 
 /// <summary>
 /// 全局 FairyGUI 界面逻辑：主界面由场景里的 UIPanel（main_view）承担；
-/// 选关与游戏界面挂在 <see cref="GRoot"/> 上。打开上层时隐藏下层（含主界面）；关闭游戏后若有选关界面则重新显示并置于最前，否则恢复主界面。
+/// 选关与全屏 View（level_view / game_view）挂在 <see cref="GRoot"/> 上。
+/// <para>主界面根节点由 <see cref="MainUIView"/> 包装；选关 / 对局由 <see cref="LevelUIView"/>、<see cref="GameUIView"/> 包装，
+/// 均继承 <see cref="FairyUIViewBase"/> 并维护弹窗栈。弹窗由 <see cref="FairyUIPopupBase"/> 体系表示。</para>
 /// </summary>
 [DisallowMultipleComponent]
 public sealed class GameUIManager : MonoBehaviour
@@ -23,6 +25,13 @@ public sealed class GameUIManager : MonoBehaviour
 
     [SerializeField]
     string gameViewComponentName = "game_view";
+
+    [SerializeField]
+    string finishPopupComponentName = "finish_popup";
+
+    [Tooltip("finish_popup 内返回选关的按钮名；留空则依次尝试 btn_back、btn_confirm、btn_ok、n0")]
+    [SerializeField]
+    string finishPopupBackButtonName = "";
 
     [Tooltip("棋盘每张卡片对应的 FairyGUI 组件名（Package1 内）")]
     [SerializeField]
@@ -43,31 +52,54 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     UIPanel mainUIPanel;
 
-    GComponent _levelView;
-    GComponent _gameView;
+    MainUIView _mainUIView;
+    LevelUIView _levelUIView;
+    GameUIView _gameUIView;
     LayeredMatchBoardBinder _boardBinder;
 
     /// <summary>由选关 JSON 生成的临时关卡，关闭游戏时需 Destroy。</summary>
     MatchLevelDefinition _ownedMatchLevelInstance;
 
     EventCallback1 _levelListClickHandler;
+    EventCallback1 _finishPopupBackClickHandler;
 
-    public bool IsLevelViewOpen => _levelView != null && !_levelView.isDisposed;
+    public bool IsLevelViewOpen => _levelUIView != null && !_levelUIView.Root.isDisposed;
 
-    public bool IsGameViewOpen => _gameView != null && !_gameView.isDisposed;
+    public bool IsGameViewOpen => _gameUIView != null && !_gameUIView.Root.isDisposed;
 
     void Awake()
     {
         Instance = this;
         _levelListClickHandler = OnLevelListItemClick;
+        _finishPopupBackClickHandler = OnFinishPopupBackClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
+        EnsureMainUIView();
+    }
+
+    /// <summary>
+    /// 使用 <see cref="MainUIView"/> 包装 UIPanel 根节点；面板尚未生成时返回 null。
+    /// </summary>
+    public MainUIView EnsureMainUIView()
+    {
+        if (_mainUIView != null && !_mainUIView.Root.isDisposed)
+            return _mainUIView;
+
+        GComponent ui = mainUIPanel != null ? mainUIPanel.ui : null;
+        if (ui == null)
+            return null;
+
+        _mainUIView = new MainUIView(ui);
+        return _mainUIView;
     }
 
     void OnDestroy()
     {
         if (Instance == this)
             Instance = null;
+
+        _mainUIView?.ClearPopups();
+        _mainUIView = null;
 
         CloseLevelView();
         CloseGameView();
@@ -100,11 +132,11 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
-        if (_levelView != null && !_levelView.isDisposed)
+        if (_levelUIView != null && !_levelUIView.Root.isDisposed)
         {
             RefreshLevelList();
-            _levelView.visible = true;
-            GRoot.inst.SetChildIndex(_levelView, GRoot.inst.numChildren - 1);
+            _levelUIView.Root.visible = true;
+            GRoot.inst.SetChildIndex(_levelUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
         }
@@ -118,19 +150,19 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
-        _levelView = com;
-        GRoot.inst.AddChild(_levelView);
-        _levelView.SetXY(0, 0);
-        _levelView.MakeFullScreen();
-        _levelView.AddRelation(GRoot.inst, RelationType.Size);
+        _levelUIView = new LevelUIView(com);
+        GRoot.inst.AddChild(_levelUIView.Root);
+        _levelUIView.Root.SetXY(0, 0);
+        _levelUIView.Root.MakeFullScreen();
+        _levelUIView.Root.AddRelation(GRoot.inst, RelationType.Size);
 
-        BindLevelList(_levelView);
+        BindLevelList(_levelUIView);
         RefreshUnderlayVisibility();
     }
 
-    void BindLevelList(GComponent root)
+    void BindLevelList(LevelUIView view)
     {
-        GList list = root.GetChild("level")?.asList;
+        GList list = view.LevelList;
         if (list == null)
         {
             Debug.LogError("[GameUIManager] level_view 下未找到名为 \"level\" 的 GList。");
@@ -145,9 +177,9 @@ public sealed class GameUIManager : MonoBehaviour
 
     void RefreshLevelList()
     {
-        if (_levelView == null || _levelView.isDisposed || levelConfig == null)
+        if (_levelUIView == null || _levelUIView.Root.isDisposed || levelConfig == null)
             return;
-        GList list = _levelView.GetChild("level")?.asList;
+        GList list = _levelUIView.LevelList;
         if (list == null)
             return;
         list.numItems = levelConfig.rows.Count;
@@ -192,32 +224,34 @@ public sealed class GameUIManager : MonoBehaviour
     /// <summary>进入游戏时保留选关界面实例，仅隐藏，便于关闭游戏后回到选关。</summary>
     void HideLevelViewForOverlay()
     {
-        if (_levelView != null && !_levelView.isDisposed)
-            _levelView.visible = false;
+        if (_levelUIView != null && !_levelUIView.Root.isDisposed)
+            _levelUIView.Root.visible = false;
     }
 
     /// <summary>是否存在遮住主界面的全屏层（选关可见，或游戏界面存在）。</summary>
     bool HasFullscreenOverlay()
     {
-        if (_gameView != null && !_gameView.isDisposed)
+        if (_gameUIView != null && !_gameUIView.Root.isDisposed)
             return true;
-        if (_levelView != null && !_levelView.isDisposed && _levelView.visible)
+        if (_levelUIView != null && !_levelUIView.Root.isDisposed && _levelUIView.Root.visible)
             return true;
         return false;
     }
 
     void RefreshUnderlayVisibility()
     {
-        if (mainUIPanel?.ui != null)
-            mainUIPanel.ui.visible = !HasFullscreenOverlay();
+        EnsureMainUIView();
+        GComponent mainRoot = _mainUIView != null ? _mainUIView.Root : mainUIPanel?.ui;
+        if (mainRoot != null && !mainRoot.isDisposed)
+            mainRoot.visible = !HasFullscreenOverlay();
     }
 
     void BringLevelViewToFrontOnGRoot()
     {
-        if (_levelView == null || _levelView.isDisposed)
+        if (_levelUIView == null || _levelUIView.Root.isDisposed)
             return;
-        _levelView.visible = true;
-        GRoot.inst.SetChildIndex(_levelView, GRoot.inst.numChildren - 1);
+        _levelUIView.Root.visible = true;
+        GRoot.inst.SetChildIndex(_levelUIView.Root, GRoot.inst.numChildren - 1);
     }
 
     /// <summary>
@@ -225,13 +259,15 @@ public sealed class GameUIManager : MonoBehaviour
     /// </summary>
     public void CloseLevelView()
     {
-        if (_levelView == null || _levelView.isDisposed)
+        if (_levelUIView == null || _levelUIView.Root.isDisposed)
         {
-            _levelView = null;
+            _levelUIView = null;
             return;
         }
 
-        GList list = _levelView.GetChild("level")?.asList;
+        _levelUIView.ClearPopups();
+
+        GList list = _levelUIView.LevelList;
         if (list != null)
         {
             list.onClickItem.Remove(_levelListClickHandler);
@@ -239,8 +275,8 @@ public sealed class GameUIManager : MonoBehaviour
             list.numItems = 0;
         }
 
-        _levelView.Dispose();
-        _levelView = null;
+        _levelUIView.Root.Dispose();
+        _levelUIView = null;
         RefreshUnderlayVisibility();
     }
 
@@ -263,16 +299,18 @@ public sealed class GameUIManager : MonoBehaviour
 
         MatchLevelDefinition def = levelOverride != null ? levelOverride : matchLevel;
 
-        if (_gameView != null && !_gameView.isDisposed)
+        if (_gameUIView != null && !_gameUIView.Root.isDisposed)
         {
             DisposeOwnedMatchLevel();
             TearDownBoard();
 
+            _gameUIView.ClearPopups();
+
             _ownedMatchLevelInstance = destroyLevelWhenClosed ? def : null;
 
             _boardBinder = new LayeredMatchBoardBinder();
-            _boardBinder.Bind(_gameView, packageName, cardComponentName, cardCellGap, def);
-            GRoot.inst.SetChildIndex(_gameView, GRoot.inst.numChildren - 1);
+            _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+            GRoot.inst.SetChildIndex(_gameUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
         }
@@ -293,15 +331,72 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
-        _gameView = com;
-        GRoot.inst.AddChild(_gameView);
-        _gameView.SetXY(0, 0);
-        _gameView.MakeFullScreen();
-        _gameView.AddRelation(GRoot.inst, RelationType.Size);
+        _gameUIView = new GameUIView(com);
+        GRoot.inst.AddChild(_gameUIView.Root);
+        _gameUIView.Root.SetXY(0, 0);
+        _gameUIView.Root.MakeFullScreen();
+        _gameUIView.Root.AddRelation(GRoot.inst, RelationType.Size);
 
         _boardBinder = new LayeredMatchBoardBinder();
-        _boardBinder.Bind(_gameView, packageName, cardComponentName, cardCellGap, def);
+        _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
         RefreshUnderlayVisibility();
+    }
+
+    void OnMatchBoardCompleted()
+    {
+        ShowFinishPopup();
+    }
+
+    void ShowFinishPopup()
+    {
+        EnsurePackageLoaded();
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        GObject obj = UIPackage.CreateObject(packageName, finishPopupComponentName);
+        var popupRoot = obj as GComponent;
+        if (popupRoot == null)
+        {
+            Debug.LogError($"[GameUIManager] 创建失败：{packageName}/{finishPopupComponentName} 不存在或不是组件。");
+            obj?.Dispose();
+            return;
+        }
+
+        var finishPopup = new FairyUIPopupHost(popupRoot);
+        _gameUIView.PushPopup(finishPopup);
+
+        GButton btn = ResolveFinishPopupBackButton(finishPopup.Root);
+        if (btn != null)
+            btn.onClick.Add(_finishPopupBackClickHandler);
+        else
+            Debug.LogWarning("[GameUIManager] finish_popup 未找到返回按钮（可在 Inspector 填写 finishPopupBackButtonName）。");
+    }
+
+    static GButton ResolveFinishPopupBackButton(GComponent popup, string preferredName)
+    {
+        if (!string.IsNullOrEmpty(preferredName))
+        {
+            GObject g = popup.GetChild(preferredName);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        foreach (string name in new[] { "btn_back", "btn_confirm", "btn_ok", "n0" })
+        {
+            GObject g = popup.GetChild(name);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        return null;
+    }
+
+    GButton ResolveFinishPopupBackButton(GComponent popup) =>
+        ResolveFinishPopupBackButton(popup, finishPopupBackButtonName);
+
+    void OnFinishPopupBackClicked(EventContext _)
+    {
+        CloseGameView();
     }
 
     void TearDownBoard()
@@ -318,17 +413,26 @@ public sealed class GameUIManager : MonoBehaviour
         TearDownBoard();
         DisposeOwnedMatchLevel();
 
-        if (_gameView == null || _gameView.isDisposed)
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
         {
-            _gameView = null;
+            _gameUIView = null;
             RefreshUnderlayVisibility();
             return;
         }
 
-        _gameView.Dispose();
-        _gameView = null;
+        _gameUIView.ClearPopups();
+        _gameUIView.Root.Dispose();
+        _gameUIView = null;
 
         BringLevelViewToFrontOnGRoot();
         RefreshUnderlayVisibility();
+    }
+
+    /// <summary>
+    /// 关闭游戏 View 栈顶的弹窗（若有）；用于多层弹窗时仅关掉最上一层。
+    /// </summary>
+    public bool CloseTopGamePopup()
+    {
+        return _gameUIView != null && _gameUIView.CloseTopPopup();
     }
 }
