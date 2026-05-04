@@ -1,6 +1,11 @@
+using System;
+using System.Globalization;
 using FairyGUI;
 using UnityEngine;
+using VitaMj.Config;
 using VitaMj.MatchGame;
+
+using ConfigLevelRow = VitaMj.Config.LevelConfigRow;
 
 /// <summary>
 /// 全局 FairyGUI 界面逻辑：主界面由场景里的 UIPanel（main_view）承担；
@@ -40,9 +45,9 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     float cardCellGap = 8f;
 
-    [Tooltip("关卡列表数据源；为空或无可导入行时，选关界面将直接进入默认游戏")]
+    [Tooltip("选关列表：ConfigReader 表名，与 Assets/Config 下 xlsx 文件名一致（不含扩展名），如 Level → Resources/ExportConfig/Level.bytes")]
     [SerializeField]
-    LevelConfig levelConfig;
+    string levelConfigTableKey = "Level";
 
     [Tooltip("留空则打开游戏界面时使用默认 4×5×2 程序化棋盘")]
     [SerializeField]
@@ -62,6 +67,9 @@ public sealed class GameUIManager : MonoBehaviour
 
     EventCallback1 _levelListClickHandler;
     EventCallback1 _finishPopupBackClickHandler;
+
+    /// <summary>当前 Level 表中行的顺序（与导出 Excel 行序一致），列表项索引与之对应。</summary>
+    readonly System.Collections.Generic.List<string> _levelRowTagsOrdered = new System.Collections.Generic.List<string>();
 
     public bool IsLevelViewOpen => _levelUIView != null && !_levelUIView.Root.isDisposed;
 
@@ -119,15 +127,15 @@ public sealed class GameUIManager : MonoBehaviour
     }
 
     /// <summary>
-    /// 打开选关界面：根据 <see cref="LevelConfig"/> 填充名为 level 的 GList；若无配置则直接进入游戏。
+    /// 打开选关界面：根据 <see cref="ConfigReader"/> 中 Level 表填充名为 level 的 GList；若无表或为空则直接进入默认游戏。
     /// </summary>
     public void OpenLevelView()
     {
         EnsurePackageLoaded();
 
-        if (levelConfig == null || levelConfig.rows == null || levelConfig.rows.Count == 0)
+        if (!RefreshLevelRowTags())
         {
-            Debug.LogWarning("[GameUIManager] LevelConfig 为空或无行，跳过选关界面。");
+            Debug.LogWarning("[GameUIManager] Level 配置表不可用或无数据（请先导出 Assets/Config/*.xlsx），跳过选关界面。");
             OpenGameView(null, false);
             return;
         }
@@ -160,6 +168,17 @@ public sealed class GameUIManager : MonoBehaviour
         RefreshUnderlayVisibility();
     }
 
+    bool RefreshLevelRowTags()
+    {
+        _levelRowTagsOrdered.Clear();
+        if (string.IsNullOrEmpty(levelConfigTableKey))
+            return false;
+        if (!ConfigReader.TryGetOrderedTags(levelConfigTableKey, out var tags))
+            return false;
+        _levelRowTagsOrdered.AddRange(tags);
+        return _levelRowTagsOrdered.Count > 0;
+    }
+
     void BindLevelList(LevelUIView view)
     {
         GList list = view.LevelList;
@@ -172,26 +191,31 @@ public sealed class GameUIManager : MonoBehaviour
         list.RemoveChildrenToPool();
         list.itemRenderer = RenderLevelListCell;
         list.onClickItem.Add(_levelListClickHandler);
-        list.numItems = levelConfig.rows.Count;
+        list.numItems = _levelRowTagsOrdered.Count;
     }
 
     void RefreshLevelList()
     {
-        if (_levelUIView == null || _levelUIView.Root.isDisposed || levelConfig == null)
+        if (_levelUIView == null || _levelUIView.Root.isDisposed)
+            return;
+        if (!RefreshLevelRowTags())
             return;
         GList list = _levelUIView.LevelList;
         if (list == null)
             return;
-        list.numItems = levelConfig.rows.Count;
+        list.numItems = _levelRowTagsOrdered.Count;
     }
 
     void RenderLevelListCell(int index, GObject obj)
     {
-        if (levelConfig == null || index < 0 || index >= levelConfig.rows.Count)
+        if (index < 0 || index >= _levelRowTagsOrdered.Count)
             return;
 
-        LevelConfigRow row = levelConfig.rows[index];
-        obj.data = index;
+        string tagKey = _levelRowTagsOrdered[index];
+        if (!ConfigReader.TryGetRow<ConfigLevelRow>(levelConfigTableKey, tagKey, out ConfigLevelRow cfg))
+            return;
+
+        obj.data = tagKey;
 
         GComponent item = obj.asCom;
         if (item == null)
@@ -199,26 +223,64 @@ public sealed class GameUIManager : MonoBehaviour
 
         GTextField lv = item.GetChild("lv")?.asTextField;
         if (lv != null)
-            lv.text = $"{row.tag} · {row.level}";
+            lv.text = $"{cfg.tag} · {cfg.level}";
     }
 
     void OnLevelListItemClick(EventContext context)
     {
-        if (levelConfig == null || !(context.data is GObject item) || !(item.data is int idx))
+        if (!(context.data is GObject item) || !(item.data is string tagKey))
             return;
 
-        if (idx < 0 || idx >= levelConfig.rows.Count)
+        if (!ConfigReader.TryGetRow<ConfigLevelRow>(levelConfigTableKey, tagKey, out ConfigLevelRow cfg))
             return;
 
-        LevelConfigRow row = levelConfig.rows[idx];
-        if (!levelConfig.TryCreateMatchLevel(row.tag, row.level, out MatchLevelDefinition def, out string err))
+        if (string.IsNullOrWhiteSpace(cfg.content))
         {
-            Debug.LogError($"[GameUIManager] 关卡加载失败（{row.tag}/{row.level}）：{err}");
+            Debug.LogError($"[GameUIManager] 关卡 content 为空（tag={tagKey}）。");
+            return;
+        }
+
+        if (!TryParseLevelCell(cfg.level, out int levelNum))
+        {
+            Debug.LogError($"[GameUIManager] 无法解析 level 列：「{cfg.level}」（tag={tagKey}）");
+            return;
+        }
+
+        MatchLevelDefinition def = null;
+        try
+        {
+            def = MatchLevelDefinitionFromJson.Create(cfg.content);
+            _ = new ConfiguredPairMatchGame(def);
+        }
+        catch (Exception ex)
+        {
+            if (def != null)
+                Destroy(def);
+
+            Debug.LogError($"[GameUIManager] 关卡加载失败（{cfg.tag}/{levelNum}）：{ex.Message}");
             return;
         }
 
         HideLevelViewForOverlay();
         OpenGameView(def, true);
+    }
+
+    static bool TryParseLevelCell(string levelStr, out int level)
+    {
+        level = 0;
+        if (string.IsNullOrWhiteSpace(levelStr))
+            return false;
+
+        if (int.TryParse(levelStr.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out level))
+            return true;
+
+        if (double.TryParse(levelStr.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double d))
+        {
+            level = (int)Math.Round(d);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>进入游戏时保留选关界面实例，仅隐藏，便于关闭游戏后回到选关。</summary>
