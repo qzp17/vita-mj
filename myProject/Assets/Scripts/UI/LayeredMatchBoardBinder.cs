@@ -28,18 +28,22 @@ public sealed class LayeredMatchBoardBinder
     /// <summary>配对成功/失败动效播放期间禁止操作棋盘。</summary>
     bool _boardLocked;
 
+    System.Action _onBoardComplete;
+
     public IPairMatchGame Model => _model;
 
     /// <summary>FairyGUI 里用于摆放卡片的容器；建议在 game_view 中建名为 card_holder 的空组件。</summary>
     public const string HolderChildName = "card_holder";
 
     /// <param name="level">非空则按 <see cref="ConfiguredPairMatchGame"/> 布局；为空则使用默认 4×5×2 程序化棋盘。</param>
-    public void Bind(GComponent gameViewRoot, string packageName, string cardComponentName, float cellGap, MatchLevelDefinition level = null)
+    /// <param name="onBoardComplete">全部消除且结算动效结束后调用（仅触发一次）。</param>
+    public void Bind(GComponent gameViewRoot, string packageName, string cardComponentName, float cellGap, MatchLevelDefinition level = null, System.Action onBoardComplete = null)
     {
         Dispose();
         _packageName = packageName;
         _cardComponentName = cardComponentName;
         _gap = cellGap;
+        _onBoardComplete = onBoardComplete;
 
         GObject holderObj = gameViewRoot.GetChild(HolderChildName);
         _holder = holderObj != null ? holderObj.asCom : gameViewRoot;
@@ -291,6 +295,8 @@ public sealed class LayeredMatchBoardBinder
     void OnBoardComplete()
     {
         Debug.Log("[LayeredMatchBoardBinder] 全部消除，关卡完成");
+        _onBoardComplete?.Invoke();
+        _onBoardComplete = null;
     }
 
     void RefreshAllCards()
@@ -408,6 +414,7 @@ public sealed class LayeredMatchBoardBinder
         _clickHandler = null;
         _holder = null;
         _model = null;
+        _onBoardComplete = null;
     }
 
     /// <summary>仅统计未使用策划绝对坐标的牌，用于居中推算网格；若全部为绝对坐标则退化为 1×1。</summary>
