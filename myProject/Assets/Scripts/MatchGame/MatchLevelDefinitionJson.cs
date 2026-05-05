@@ -18,6 +18,13 @@ namespace VitaMj.MatchGame
         public int valueMin = 1;
         public int valueMax = 12;
         public int randomSeed;
+
+        /// <summary>倒计时秒数；与 <see cref="time"/> 二选一即可（同时存在时优先本字段）。</summary>
+        public int timeLimitSeconds;
+
+        /// <summary>与 <c>timeLimitSeconds</c> 同义，便于在 content JSON 里写 <c>\"time\": 60</c>。</summary>
+        public int time;
+
         public MatchLevelCardRowJson[] cards;
     }
 
@@ -68,6 +75,7 @@ namespace VitaMj.MatchGame
             target.valueMin = dto.valueMin;
             target.valueMax = dto.valueMax;
             target.randomSeed = dto.randomSeed;
+            target.timeLimitSeconds = ResolveTimeLimitSeconds(dto);
 
             target.cards ??= new List<MatchLevelCardRow>();
             target.cards.Clear();
@@ -104,6 +112,15 @@ namespace VitaMj.MatchGame
 
                 target.cards.Add(card);
             }
+        }
+
+        static int ResolveTimeLimitSeconds(MatchLevelDefinitionJson dto)
+        {
+            if (dto == null)
+                return 0;
+            if (dto.timeLimitSeconds > 0)
+                return dto.timeLimitSeconds;
+            return dto.time > 0 ? dto.time : 0;
         }
     }
 }

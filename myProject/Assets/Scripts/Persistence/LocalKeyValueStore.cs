@@ -28,9 +28,20 @@ namespace VitaMj.Persistence
             return PlayerPrefs.GetInt(full);
         }
 
+        public static float GetFloat(string key, float defaultValue = 0f)
+        {
+            return PlayerPrefs.GetFloat(Prefix + key, defaultValue);
+        }
+
         public static void SetInt(string key, int value)
         {
             PlayerPrefs.SetInt(Prefix + key, value);
+            PlayerPrefs.Save();
+        }
+
+        public static void SetFloat(string key, float value)
+        {
+            PlayerPrefs.SetFloat(Prefix + key, value);
             PlayerPrefs.Save();
         }
 

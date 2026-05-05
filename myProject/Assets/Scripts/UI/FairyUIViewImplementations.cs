@@ -9,6 +9,8 @@ public sealed class MainUIView : FairyUIViewBase
     }
 
     public GButton N0Button => Root.GetChild("n0")?.asButton;
+
+    public GButton BtnSetting => Root.GetChild("btn_setting")?.asButton;
 }
 
 /// <summary>选关界面 level_view（GRoot 子节点）。</summary>
@@ -33,4 +35,6 @@ public sealed class GameUIView : FairyUIViewBase
     public GButton BtnHelp => Root.GetChild("btn_help")?.asButton;
 
     public GButton BtnQuit => Root.GetChild("btn_quit")?.asButton;
+
+    public GTextField TxtTime => Root.GetChild("txt_time")?.asTextField;
 }

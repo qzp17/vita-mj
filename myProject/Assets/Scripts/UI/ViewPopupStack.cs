@@ -1,12 +1,16 @@
 using System.Collections.Generic;
 using FairyGUI;
+using UnityEngine;
 
 /// <summary>
 /// 挂在某一 View 根节点上的弹窗栈：新弹窗叠在最上层；关闭顶层后下层自动露出；
 /// View 整体关闭时应调用 <see cref="Clear"/>，避免残留引用。
+/// <para>压栈时为弹窗套上全屏层：半透明遮罩拦截下层点击；弹窗本体按设计尺寸在 View 内居中。</para>
 /// </summary>
 public sealed class ViewPopupStack
 {
+    const float DefaultModalAlpha = 0.55f;
+
     readonly GComponent _viewRoot;
     readonly Stack<GComponent> _popups = new Stack<GComponent>();
 
@@ -26,12 +30,41 @@ public sealed class ViewPopupStack
         if (popup == null || popup.isDisposed || _viewRoot == null || _viewRoot.isDisposed)
             return;
 
-        _viewRoot.AddChild(popup);
-        popup.SetXY(0, 0);
-        popup.MakeFullScreen();
-        popup.AddRelation(_viewRoot, RelationType.Size);
-        _viewRoot.SetChildIndex(popup, _viewRoot.numChildren - 1);
-        _popups.Push(popup);
+        GComponent modalLayer = BuildModalWrappedPopup(_viewRoot, popup);
+
+        _viewRoot.AddChild(modalLayer);
+        modalLayer.SetXY(0, 0);
+        modalLayer.SetSize(_viewRoot.width, _viewRoot.height);
+        modalLayer.AddRelation(_viewRoot, RelationType.Size);
+        _viewRoot.SetChildIndex(modalLayer, _viewRoot.numChildren - 1);
+        _popups.Push(modalLayer);
+    }
+
+    /// <summary>全屏容器 + 底遮罩 + 居中弹窗内容。</summary>
+    static GComponent BuildModalWrappedPopup(GComponent viewRoot, GComponent popup)
+    {
+        var layer = new GComponent();
+        layer.name = layer.gameObjectName = "ViewPopupModalLayer";
+
+        float w = Mathf.Max(1f, viewRoot.width);
+        float h = Mathf.Max(1f, viewRoot.height);
+
+        layer.SetSize(w, h);
+
+        var mask = new GGraph();
+        mask.name = mask.gameObjectName = "ViewPopupModalMask";
+        mask.touchable = true;
+        Color fill = Color.black;
+        fill.a = DefaultModalAlpha;
+        mask.DrawRect(w, h, 0, Color.clear, fill);
+        mask.AddRelation(layer, RelationType.Size);
+        mask.SetXY(0, 0);
+        layer.AddChild(mask);
+
+        layer.AddChild(popup);
+        popup.Center(true);
+
+        return layer;
     }
 
     /// <summary>
