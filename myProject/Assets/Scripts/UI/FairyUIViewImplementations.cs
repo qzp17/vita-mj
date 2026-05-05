@@ -9,6 +9,8 @@ public sealed class MainUIView : FairyUIViewBase
     }
 
     public GButton N0Button => Root.GetChild("n0")?.asButton;
+
+    public GButton BtnSetting => Root.GetChild("btn_setting")?.asButton;
 }
 
 /// <summary>选关界面 level_view（GRoot 子节点）。</summary>

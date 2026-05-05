@@ -41,6 +41,9 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     string finishPopupComponentName = "finish_popup";
 
+    [SerializeField]
+    string settingPopupComponentName = "setting_popup";
+
     [Tooltip("finish_popup 内返回选关的按钮名；留空则依次尝试 btn_back、btn_confirm、btn_ok、n0")]
     [SerializeField]
     string finishPopupBackButtonName = "";
@@ -100,6 +103,7 @@ public sealed class GameUIManager : MonoBehaviour
     EventCallback1 _gameQuitClickHandler;
     EventCallback1 _finishRetryClickHandler;
     EventCallback1 _finishNextClickHandler;
+    EventCallback1 _settingPopupCloseClickHandler;
 
     bool _gameEnded;
 
@@ -137,6 +141,7 @@ public sealed class GameUIManager : MonoBehaviour
         _gameQuitClickHandler = OnGameQuitClicked;
         _finishRetryClickHandler = OnFinishRetryClicked;
         _finishNextClickHandler = OnFinishNextClicked;
+        _settingPopupCloseClickHandler = OnSettingPopupCloseClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
@@ -147,6 +152,92 @@ public sealed class GameUIManager : MonoBehaviour
         if (playStartupBackgroundMusic &&
             !string.IsNullOrEmpty(startupBackgroundMusicTag))
             AudioManager.Instance.PlayMusicByTag(startupBackgroundMusicTag, true);
+
+        AudioManager.Instance.RefreshVolumesFromPersistedSettings();
+    }
+
+    /// <summary>
+    /// 在主界面弹出设置（依赖 Package1/<see cref="settingPopupComponentName"/>）。
+    /// </summary>
+    public void OpenSettingPopup()
+    {
+        EnsureMainUIView();
+        if (_mainUIView == null || _mainUIView.Root.isDisposed)
+        {
+            Debug.LogError("[GameUIManager] 主界面为空，无法打开设置。");
+            return;
+        }
+
+        EnsurePackageLoaded();
+
+        GObject obj = UIPackage.CreateObject(packageName, settingPopupComponentName);
+        var root = obj as GComponent;
+        if (root == null)
+        {
+            Debug.LogError($"[GameUIManager] 创建失败：{packageName}/{settingPopupComponentName} 不存在或不是组件。");
+            obj?.Dispose();
+            return;
+        }
+
+        BindSettingPopupComponents(root);
+
+        var host = new FairyUIPopupHost(root);
+        _mainUIView.PushPopup(host);
+    }
+
+    void BindSettingPopupComponents(GComponent root)
+    {
+        GButton close = root.GetChild("btn_close")?.asButton;
+        close?.onClick.Add(_settingPopupCloseClickHandler);
+
+        GButton audioBtn = root.GetChild("btn_audio")?.asButton;
+        GSlider sliderSound = root.GetChild("slider_sound")?.asSlider;
+
+        bool musicOn = AudioSettingsStore.GetMusicEnabled();
+        if (audioBtn != null)
+        {
+            audioBtn.selected = musicOn;
+            audioBtn.onChanged.Add(OnSettingMusicToggleChanged);
+        }
+
+        if (sliderSound != null)
+        {
+            SetSliderNormalized(sliderSound, AudioSettingsStore.GetMasterVolume01());
+            sliderSound.onChanged.Add(OnSettingVolumeSliderChanged);
+        }
+    }
+
+    void OnSettingPopupCloseClicked(EventContext _) =>
+        _mainUIView?.CloseTopPopup();
+
+    void OnSettingMusicToggleChanged(EventContext ctx)
+    {
+        if (ctx.sender is not GButton btn)
+            return;
+        AudioSettingsStore.SetMusicEnabled(btn.selected);
+        AudioManager.Instance.RefreshVolumesFromPersistedSettings();
+    }
+
+    void OnSettingVolumeSliderChanged(EventContext ctx)
+    {
+        if (ctx.sender is not GSlider sl)
+            return;
+        AudioSettingsStore.SetMasterVolume01(SliderToNormalized(sl));
+        AudioManager.Instance.RefreshVolumesFromPersistedSettings();
+    }
+
+    static float SliderToNormalized(GSlider sl)
+    {
+        double denom = sl.max - sl.min;
+        if (denom <= 0.0001d)
+            return 1f;
+        return Mathf.Clamp01((float)((sl.value - sl.min) / denom));
+    }
+
+    static void SetSliderNormalized(GSlider sl, float n01)
+    {
+        n01 = Mathf.Clamp01(n01);
+        sl.value = sl.min + (sl.max - sl.min) * n01;
     }
 
     /// <summary>

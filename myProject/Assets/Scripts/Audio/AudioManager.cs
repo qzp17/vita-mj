@@ -3,6 +3,7 @@ using FairyGUI;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using VitaMj.Config;
+using VitaMj.Persistence;
 
 /// <summary>
 /// 统一管理 FairyGUI Audio 包内音效：通过配置表 tag 查到包内音效资源名，再交给 Unity <see cref="AudioSource"/> 播放。
@@ -132,6 +133,15 @@ public sealed class AudioManager : MonoBehaviour
     {
         EnsureAudioSources();
         sfxSource.volume = Mathf.Clamp01(linear01);
+    }
+
+    /// <summary>按本地设置应用 BGM/SFX 音量（关音乐时 BGM 为 0，音量条仍写入存档）。</summary>
+    public void RefreshVolumesFromPersistedSettings()
+    {
+        EnsureAudioSources();
+        float v = AudioSettingsStore.GetMasterVolume01();
+        SetSfxVolume(v);
+        SetMusicVolume(AudioSettingsStore.GetMusicEnabled() ? v : 0f);
     }
 
     bool TryGetClipFromConfig(string tag, out AudioClip clip)
