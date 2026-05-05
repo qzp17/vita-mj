@@ -16,6 +16,7 @@ public sealed class LayeredMatchBoardBinder
     const string TrSelect = "select";
     const string TrSucc = "succ";
     const string TrFail = "fail";
+    const string TrHelp = "help";
 
     readonly Dictionary<int, GComponent> _cards = new Dictionary<int, GComponent>();
     IPairMatchGame _model;
@@ -27,6 +28,9 @@ public sealed class LayeredMatchBoardBinder
 
     /// <summary>配对成功/失败动效播放期间禁止操作棋盘。</summary>
     bool _boardLocked;
+
+    int? _hintIdA;
+    int? _hintIdB;
 
     System.Action _onBoardComplete;
 
@@ -134,6 +138,67 @@ public sealed class LayeredMatchBoardBinder
         var tip = gameViewRoot.GetChild("txt_tip")?.asTextField;
         if (tip != null)
             tip.text = "翻开两张相同数字即可消除（上层未消尽时下层锁住）";
+    }
+
+    /// <summary>查找一对当面可消的相同牌并在二者上循环播放 <c>help</c> 动效。</summary>
+    public void StartHintPairPulse()
+    {
+        if (_model == null || _boardLocked)
+            return;
+
+        StopHintPulseInternal();
+
+        if (!PairMatchRules.TryFindClickableMatchingPair(_model, out int a, out int b))
+        {
+            Debug.LogWarning("[LayeredMatchBoardBinder] 当前无可提示的消除对。");
+            return;
+        }
+
+        _hintIdA = a;
+        _hintIdB = b;
+        StartHelpTransitionLoop(GetCard(a));
+        StartHelpTransitionLoop(GetCard(b));
+    }
+
+    /// <summary>停止 help 提示动效。</summary>
+    public void StopHintPairPulse()
+    {
+        StopHintPulseInternal();
+    }
+
+    void StopHintPulseInternal()
+    {
+        if (_hintIdA.HasValue)
+            StopHelpTransition(GetCard(_hintIdA.Value));
+        if (_hintIdB.HasValue)
+            StopHelpTransition(GetCard(_hintIdB.Value));
+        _hintIdA = null;
+        _hintIdB = null;
+    }
+
+    static void StartHelpTransitionLoop(GComponent card)
+    {
+        if (card == null || card.isDisposed)
+            return;
+
+        Transition tr = card.GetTransition(TrHelp);
+        if (tr == null)
+        {
+            Debug.LogWarning($"[LayeredMatchBoardBinder] card 上未定义「{TrHelp}」动效（FairyGUI 编辑器中为 card 添加 Transition）。");
+            return;
+        }
+
+        tr.Play(-1, 0, null);
+    }
+
+    static void StopHelpTransition(GComponent card)
+    {
+        if (card == null || card.isDisposed)
+            return;
+
+        Transition tr = card.GetTransition(TrHelp);
+        if (tr != null && tr.playing)
+            tr.Stop();
     }
 
     static GTextField ResolveNumberLabel(GComponent card)
@@ -250,6 +315,12 @@ public sealed class LayeredMatchBoardBinder
             return;
         }
 
+        if (_hintIdA.HasValue &&
+            _hintIdB.HasValue &&
+            cellId != _hintIdA.Value &&
+            cellId != _hintIdB.Value)
+            StopHintPulseInternal();
+
         int? selBefore = _model.SelectedCellId;
 
         var result = _model.TryClick(cellId);
@@ -271,6 +342,7 @@ public sealed class LayeredMatchBoardBinder
                 break;
 
             case LayeredMatchClickResult.MismatchedPair:
+                StopHintPulseInternal();
                 if (selBefore.HasValue)
                     PlayPairTransitionThenRefresh(selBefore.Value, cellId, TrFail);
                 else
@@ -278,6 +350,7 @@ public sealed class LayeredMatchBoardBinder
                 break;
 
             case LayeredMatchClickResult.MatchedPair:
+                StopHintPulseInternal();
                 if (selBefore.HasValue)
                     PlayPairTransitionThenRefresh(selBefore.Value, cellId, TrSucc, AfterMatchedRefresh);
                 else
@@ -395,6 +468,8 @@ public sealed class LayeredMatchBoardBinder
     {
         _boardLocked = false;
 
+        StopHintPulseInternal();
+
         if (_cards.Count > 0 && _clickHandler != null)
         {
             foreach (var kv in _cards)
@@ -406,6 +481,7 @@ public sealed class LayeredMatchBoardBinder
                     StopTransitionIfPlaying(card, TrSelect);
                     StopTransitionIfPlaying(card, TrSucc);
                     StopTransitionIfPlaying(card, TrFail);
+                    StopTransitionIfPlaying(card, TrHelp);
                 }
             }
         }

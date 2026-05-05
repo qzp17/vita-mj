@@ -56,5 +56,38 @@ namespace VitaMj.MatchGame
 
             return LayeredMatchClickResult.MismatchedPair;
         }
+
+        /// <summary>
+        /// 寻找一对当面可点且牌面数值相同、仍可消除的格子（用于提示）。
+        /// </summary>
+        public static bool TryFindClickableMatchingPair(IPairMatchGame game, out int cellIdA, out int cellIdB)
+        {
+            cellIdA = cellIdB = -1;
+            if (game == null)
+                return false;
+
+            IReadOnlyList<LayeredGridCell> cells = game.Cells;
+            for (int i = 0; i < cells.Count; i++)
+            {
+                LayeredGridCell a = cells[i];
+                if (a.Eliminated || !game.CanClick(a.Id))
+                    continue;
+
+                for (int j = i + 1; j < cells.Count; j++)
+                {
+                    LayeredGridCell b = cells[j];
+                    if (b.Eliminated || !game.CanClick(b.Id))
+                        continue;
+                    if (a.Value != b.Value)
+                        continue;
+
+                    cellIdA = a.Id;
+                    cellIdB = b.Id;
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 }

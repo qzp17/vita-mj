@@ -4,6 +4,7 @@ using FairyGUI;
 using UnityEngine;
 using VitaMj.Config;
 using VitaMj.MatchGame;
+using VitaMj.Persistence;
 
 using ConfigLevelRow = VitaMj.Config.LevelConfigRow;
 
@@ -57,6 +58,16 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     UIPanel mainUIPanel;
 
+    [SerializeField]
+    bool playStartupBackgroundMusic = true;
+
+    [SerializeField]
+    string startupBackgroundMusicTag = "main_bgm";
+
+    [Tooltip("选关条目组件上控制器名：0=open，1=finish，2=lock")]
+    [SerializeField]
+    string levelCellStateControllerName = "state";
+
     MainUIView _mainUIView;
     LevelUIView _levelUIView;
     GameUIView _gameUIView;
@@ -67,9 +78,14 @@ public sealed class GameUIManager : MonoBehaviour
 
     EventCallback1 _levelListClickHandler;
     EventCallback1 _finishPopupBackClickHandler;
+    EventCallback1 _gameHelpClickHandler;
+    EventCallback1 _gameQuitClickHandler;
 
     /// <summary>当前 Level 表中行的顺序（与导出 Excel 行序一致），列表项索引与之对应。</summary>
     readonly System.Collections.Generic.List<string> _levelRowTagsOrdered = new System.Collections.Generic.List<string>();
+
+    /// <summary>从选关列表进入对局时为列表下标；程序化/无主线路径为 -1。</summary>
+    int _campaignLevelListIndex = -1;
 
     public bool IsLevelViewOpen => _levelUIView != null && !_levelUIView.Root.isDisposed;
 
@@ -80,9 +96,18 @@ public sealed class GameUIManager : MonoBehaviour
         Instance = this;
         _levelListClickHandler = OnLevelListItemClick;
         _finishPopupBackClickHandler = OnFinishPopupBackClicked;
+        _gameHelpClickHandler = OnGameHelpClicked;
+        _gameQuitClickHandler = OnGameQuitClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
+    }
+
+    void Start()
+    {
+        if (playStartupBackgroundMusic &&
+            !string.IsNullOrEmpty(startupBackgroundMusicTag))
+            AudioManager.Instance.PlayMusicByTag(startupBackgroundMusicTag, true);
     }
 
     /// <summary>
@@ -192,6 +217,25 @@ public sealed class GameUIManager : MonoBehaviour
         list.itemRenderer = RenderLevelListCell;
         list.onClickItem.Add(_levelListClickHandler);
         list.numItems = _levelRowTagsOrdered.Count;
+        RefreshLevelCellsVisuals(list);
+    }
+
+    /// <summary>非虚拟列表在 <see cref="GList.numItems"/> 不变时不会重绑 itemRenderer，通关后须显式刷新。</summary>
+    void RefreshLevelCellsVisuals(GList list)
+    {
+        if (list == null || list.itemRenderer == null)
+            return;
+
+        if (list.isVirtual)
+        {
+            list.RefreshVirtualList();
+            return;
+        }
+
+        int n = _levelRowTagsOrdered.Count;
+        int count = Mathf.Min(n, list.numChildren);
+        for (int i = 0; i < count; i++)
+            list.itemRenderer(i, list.GetChildAt(i));
     }
 
     void RefreshLevelList()
@@ -204,6 +248,7 @@ public sealed class GameUIManager : MonoBehaviour
         if (list == null)
             return;
         list.numItems = _levelRowTagsOrdered.Count;
+        RefreshLevelCellsVisuals(list);
     }
 
     void RenderLevelListCell(int index, GObject obj)
@@ -221,6 +266,12 @@ public sealed class GameUIManager : MonoBehaviour
         if (item == null)
             return;
 
+        LevelCellVisualState cellState = LevelProgressStore.GetCellVisualState(index);
+        Controller st = item.GetController(levelCellStateControllerName);
+        if (st != null)
+            st.selectedIndex = (int)cellState;
+        item.touchable = cellState != LevelCellVisualState.Lock;
+
         GTextField lv = item.GetChild("lv")?.asTextField;
         if (lv != null)
             lv.text = $"{cfg.tag} · {cfg.level}";
@@ -229,6 +280,13 @@ public sealed class GameUIManager : MonoBehaviour
     void OnLevelListItemClick(EventContext context)
     {
         if (!(context.data is GObject item) || !(item.data is string tagKey))
+            return;
+
+        int listIndex = _levelRowTagsOrdered.IndexOf(tagKey);
+        if (listIndex < 0)
+            return;
+
+        if (LevelProgressStore.GetCellVisualState(listIndex) == LevelCellVisualState.Lock)
             return;
 
         if (!ConfigReader.TryGetRow<ConfigLevelRow>(levelConfigTableKey, tagKey, out ConfigLevelRow cfg))
@@ -261,6 +319,7 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
+        _campaignLevelListIndex = listIndex;
         HideLevelViewForOverlay();
         OpenGameView(def, true);
     }
@@ -288,6 +347,48 @@ public sealed class GameUIManager : MonoBehaviour
     {
         if (_levelUIView != null && !_levelUIView.Root.isDisposed)
             _levelUIView.Root.visible = false;
+    }
+
+    void BindGameToolbarIfPresent()
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        UnbindGameToolbarIfPresent();
+
+        GButton help = _gameUIView.BtnHelp;
+        if (help != null)
+            help.onClick.Add(_gameHelpClickHandler);
+
+        GButton quit = _gameUIView.BtnQuit;
+        if (quit != null)
+            quit.onClick.Add(_gameQuitClickHandler);
+    }
+
+    void UnbindGameToolbarIfPresent()
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        GButton help = _gameUIView.BtnHelp;
+        if (help != null)
+            help.onClick.Remove(_gameHelpClickHandler);
+
+        GButton quit = _gameUIView.BtnQuit;
+        if (quit != null)
+            quit.onClick.Remove(_gameQuitClickHandler);
+    }
+
+    void OnGameHelpClicked(EventContext _)
+    {
+        _boardBinder?.StartHintPairPulse();
+    }
+
+    void OnGameQuitClicked(EventContext _)
+    {
+        CloseGameView();
+        if (_levelUIView == null || _levelUIView.Root.isDisposed)
+            OpenLevelView();
     }
 
     /// <summary>是否存在遮住主界面的全屏层（选关可见，或游戏界面存在）。</summary>
@@ -357,6 +458,9 @@ public sealed class GameUIManager : MonoBehaviour
     /// <param name="destroyLevelWhenClosed">为 true 时须在关闭游戏时 Destroy（适用于 JSON 生成的运行时实例）；勿对资源资产设为 true。</param>
     public void OpenGameView(MatchLevelDefinition levelOverride = null, bool destroyLevelWhenClosed = false)
     {
+        if (!destroyLevelWhenClosed || levelOverride == null)
+            _campaignLevelListIndex = -1;
+
         EnsurePackageLoaded();
 
         MatchLevelDefinition def = levelOverride != null ? levelOverride : matchLevel;
@@ -372,6 +476,7 @@ public sealed class GameUIManager : MonoBehaviour
 
             _boardBinder = new LayeredMatchBoardBinder();
             _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+            BindGameToolbarIfPresent();
             GRoot.inst.SetChildIndex(_gameUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
@@ -388,6 +493,7 @@ public sealed class GameUIManager : MonoBehaviour
             Debug.LogError($"[GameUIManager] 创建失败：{packageName}/{gameViewComponentName} 不存在或不是组件。");
             obj?.Dispose();
             DisposeOwnedMatchLevel();
+            _campaignLevelListIndex = -1;
             BringLevelViewToFrontOnGRoot();
             RefreshUnderlayVisibility();
             return;
@@ -401,11 +507,18 @@ public sealed class GameUIManager : MonoBehaviour
 
         _boardBinder = new LayeredMatchBoardBinder();
         _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+        BindGameToolbarIfPresent();
         RefreshUnderlayVisibility();
     }
 
     void OnMatchBoardCompleted()
     {
+        if (_campaignLevelListIndex >= 0)
+            LevelProgressStore.RegisterLevelCleared(_campaignLevelListIndex);
+
+        if (_levelUIView?.LevelList != null)
+            RefreshLevelCellsVisuals(_levelUIView.LevelList);
+
         ShowFinishPopup();
     }
 
@@ -482,11 +595,23 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
+        UnbindGameToolbarIfPresent();
+
         _gameUIView.ClearPopups();
         _gameUIView.Root.Dispose();
         _gameUIView = null;
 
+        _campaignLevelListIndex = -1;
+
         BringLevelViewToFrontOnGRoot();
+        if (_levelUIView != null && !_levelUIView.Root.isDisposed && _levelUIView.LevelList != null &&
+            RefreshLevelRowTags())
+        {
+            GList lvList = _levelUIView.LevelList;
+            lvList.numItems = _levelRowTagsOrdered.Count;
+            RefreshLevelCellsVisuals(lvList);
+        }
+
         RefreshUnderlayVisibility();
     }
 

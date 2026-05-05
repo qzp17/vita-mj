@@ -9,6 +9,7 @@ namespace VitaMj.Config
         static void RegisterAllTables()
         {
             ConfigReader.ClearRegistry();
+            ConfigReader.RegisterTable<AudioConfigRow>("Audio");
             ConfigReader.RegisterTable<LevelConfigRow>("Level");
         }
     }

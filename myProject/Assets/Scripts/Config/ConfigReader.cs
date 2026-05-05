@@ -62,6 +62,23 @@ namespace VitaMj.Config
         }
 
         /// <summary>
+        /// 不按 <see cref="RegisterTable{T}"/> 反序列化为强类型行，直接返回 JSON 对象（导出列名即为属性名）。
+        /// 表中首列仍为 tag（行键）。
+        /// </summary>
+        public static bool TryGetRawRow(string tableKey, string tag, out JObject row)
+        {
+            row = null;
+            if (string.IsNullOrEmpty(tableKey) || string.IsNullOrEmpty(tag))
+                return false;
+            if (!Instance.TryGetRows(tableKey, out Dictionary<string, JObject> rows))
+                return false;
+            if (!rows.TryGetValue(tag, out JObject jo) || jo == null)
+                return false;
+            row = jo;
+            return true;
+        }
+
+        /// <summary>
         /// 获取某表全部 tag（与导出时 Excel 数据行顺序一致）；会先加载整表。
         /// </summary>
         public static bool TryGetOrderedTags(string tableKey, out IReadOnlyList<string> tags)
@@ -76,7 +93,7 @@ namespace VitaMj.Config
             return true;
         }
 
-        /// <summary>返回某表已加载后的行数（独立 tag 个数）；加载失败时为 0。</summary>
+        /// <summary>返回某表行数（独立 tag 个数）；加载失败时为 0。</summary>
         public static int GetRowCount(string tableKey)
         {
             return Instance.TryGetRows(tableKey, out Dictionary<string, JObject> rows) && rows != null ? rows.Count : 0;

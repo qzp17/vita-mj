@@ -11,9 +11,10 @@ using UnityEngine;
 using VitaMj.Config.Editor;
 
 /// <summary>
-/// 扫描 Assets/Config 下全部 .xlsx：同一工作簿内**不区分 Sheet**，各表格式一致时合并为一张配置；
-/// 第一行为字段关键字（首列必须为 tag），第二行为类型，第三行起为数据。
-/// 表名 = 文件名（净化后）；生成 C# 行类型、二进制（JSON→UTF8→VMJ1 头），由 <see cref="VitaMj.Config.ConfigReader"/> 读取。
+/// 扫描 <c>Assets/Config</c> 下全部 <c>.xlsx</c>：同一工作簿内**不区分 Sheet**，格式一致即合并为一表；
+/// 第 1 行为字段关键字（首列须为 tag），第 2 行为类型，第 3 行起为数据。
+/// **可无数据行**（仅表头），此时导出空 JSON（根对象为「无键」），仍可生成 Row 类并注册 Bootstrap。
+/// 表名 = 文件名（净化后）；无需再手写注册代码。
 /// </summary>
 public static class ExportAllConfigs
 {
@@ -43,12 +44,16 @@ public static class ExportAllConfigs
             .Where(f => !Path.GetFileName(f).StartsWith("~"))
             .ToArray();
 
+        int exportedWorkbooks = 0;
+
         foreach (string path in xlsxFiles)
         {
             string bookStem = SanitizeKey(Path.GetFileNameWithoutExtension(path));
             if (!TryMergeWorkbook(path, bookStem, silent, out string tableKey, out string className, out string rowCs,
                     out byte[] bin))
                 continue;
+
+            exportedWorkbooks++;
 
             string rowPath = Path.Combine(GeneratedFolder, className + ".g.cs");
             File.WriteAllText(rowPath, rowCs, new UTF8Encoding(true));
@@ -69,7 +74,7 @@ public static class ExportAllConfigs
         AssetDatabase.Refresh();
 
         if (!silent)
-            Debug.Log($"[Config] 导出完成：{xlsxFiles.Length} 个工作簿，Resources/ExportConfig 已更新。");
+            Debug.Log($"[Config] 导出完成：{exportedWorkbooks}/{xlsxFiles.Length} 个工作簿已写入 Generated 与 Resources/ExportConfig（含 Bootstrap 注册）。");
     }
 
     static void PruneOrphanGeneratedRows(HashSet<string> keepFiles)
@@ -168,12 +173,10 @@ public static class ExportAllConfigs
             return false;
         }
 
-        if (root.Count == 0)
-        {
-            if (!silent)
-                Debug.LogWarning($"[Config] [{bookStem}] 合并后无数据行（需从第 3 行起填写）。");
-            return false;
-        }
+        // 允许仅含第 1、2 行（字段 + 类型）而无数据行：照样生成 Row 类、空 JSON「{}」与 VMJ1 二进制，
+        // 新增表后不必先填数据才能通过一键导出；后续在 Excel 第 3 行起填写即可。
+        if (root.Count == 0 && !silent)
+            Debug.Log($"[Config] [{bookStem}] 当前无数据行，已导出空表（{{}}）；从第 3 行起填写 tag 与数据行即可。");
 
         string json = root.ToString(Formatting.None);
         bin = EncodeBinary(json);
