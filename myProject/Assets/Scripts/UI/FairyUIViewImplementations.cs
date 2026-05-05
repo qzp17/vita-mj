@@ -29,4 +29,8 @@ public sealed class GameUIView : FairyUIViewBase
         : base(root)
     {
     }
+
+    public GButton BtnHelp => Root.GetChild("btn_help")?.asButton;
+
+    public GButton BtnQuit => Root.GetChild("btn_quit")?.asButton;
 }

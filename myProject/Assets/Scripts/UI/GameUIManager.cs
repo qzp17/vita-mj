@@ -78,6 +78,8 @@ public sealed class GameUIManager : MonoBehaviour
 
     EventCallback1 _levelListClickHandler;
     EventCallback1 _finishPopupBackClickHandler;
+    EventCallback1 _gameHelpClickHandler;
+    EventCallback1 _gameQuitClickHandler;
 
     /// <summary>当前 Level 表中行的顺序（与导出 Excel 行序一致），列表项索引与之对应。</summary>
     readonly System.Collections.Generic.List<string> _levelRowTagsOrdered = new System.Collections.Generic.List<string>();
@@ -94,6 +96,8 @@ public sealed class GameUIManager : MonoBehaviour
         Instance = this;
         _levelListClickHandler = OnLevelListItemClick;
         _finishPopupBackClickHandler = OnFinishPopupBackClicked;
+        _gameHelpClickHandler = OnGameHelpClicked;
+        _gameQuitClickHandler = OnGameQuitClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
@@ -345,6 +349,48 @@ public sealed class GameUIManager : MonoBehaviour
             _levelUIView.Root.visible = false;
     }
 
+    void BindGameToolbarIfPresent()
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        UnbindGameToolbarIfPresent();
+
+        GButton help = _gameUIView.BtnHelp;
+        if (help != null)
+            help.onClick.Add(_gameHelpClickHandler);
+
+        GButton quit = _gameUIView.BtnQuit;
+        if (quit != null)
+            quit.onClick.Add(_gameQuitClickHandler);
+    }
+
+    void UnbindGameToolbarIfPresent()
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        GButton help = _gameUIView.BtnHelp;
+        if (help != null)
+            help.onClick.Remove(_gameHelpClickHandler);
+
+        GButton quit = _gameUIView.BtnQuit;
+        if (quit != null)
+            quit.onClick.Remove(_gameQuitClickHandler);
+    }
+
+    void OnGameHelpClicked(EventContext _)
+    {
+        _boardBinder?.StartHintPairPulse();
+    }
+
+    void OnGameQuitClicked(EventContext _)
+    {
+        CloseGameView();
+        if (_levelUIView == null || _levelUIView.Root.isDisposed)
+            OpenLevelView();
+    }
+
     /// <summary>是否存在遮住主界面的全屏层（选关可见，或游戏界面存在）。</summary>
     bool HasFullscreenOverlay()
     {
@@ -430,6 +476,7 @@ public sealed class GameUIManager : MonoBehaviour
 
             _boardBinder = new LayeredMatchBoardBinder();
             _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+            BindGameToolbarIfPresent();
             GRoot.inst.SetChildIndex(_gameUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
@@ -460,6 +507,7 @@ public sealed class GameUIManager : MonoBehaviour
 
         _boardBinder = new LayeredMatchBoardBinder();
         _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+        BindGameToolbarIfPresent();
         RefreshUnderlayVisibility();
     }
 
@@ -546,6 +594,8 @@ public sealed class GameUIManager : MonoBehaviour
             RefreshUnderlayVisibility();
             return;
         }
+
+        UnbindGameToolbarIfPresent();
 
         _gameUIView.ClearPopups();
         _gameUIView.Root.Dispose();
