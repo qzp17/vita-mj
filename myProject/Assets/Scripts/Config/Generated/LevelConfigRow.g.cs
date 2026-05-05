@@ -12,7 +12,5 @@ namespace VitaMj.Config
         public string level { get; set; }
         [JsonProperty("content")]
         public string content { get; set; }
-        [JsonProperty("time")]
-        public int time { get; set; }
     }
 }

@@ -61,7 +61,7 @@ namespace VitaMj.MatchGame
         [Tooltip("固定随机种子；0 表示每次开局用 TickCount")]
         public int randomSeed;
 
-        [Tooltip("本关倒计时秒数；0 表示不在资产上限制（可用 Level 表 time 列覆盖）")]
+        [Tooltip("本关倒计时秒数；0 表示不限时（与关卡 content JSON 中 timeLimitSeconds / time 一致）")]
         public int timeLimitSeconds;
 
         public List<MatchLevelCardRow> cards = new List<MatchLevelCardRow>();

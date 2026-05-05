@@ -374,9 +374,8 @@ public sealed class GameUIManager : MonoBehaviour
             return false;
         }
 
-        int rowSec = cfg.time > 0 ? cfg.time : 0;
         int jsonSec = def.timeLimitSeconds > 0 ? def.timeLimitSeconds : 0;
-        _effectiveTimeLimitSeconds = rowSec > 0 ? rowSec : (jsonSec > 0 ? jsonSec : (int?)null);
+        _effectiveTimeLimitSeconds = jsonSec > 0 ? jsonSec : (int?)null;
         _replayTimeLimitSeconds = _effectiveTimeLimitSeconds;
         _replayLevelContentJson = cfg.content;
         _replayLevelTagDisplay = cfg.tag;
@@ -820,7 +819,7 @@ public sealed class GameUIManager : MonoBehaviour
             else
             {
                 TrySetFinishText(root, "txt_stats", "本关未开启限时");
-                TrySetFinishText(root, "txt_hint", "可尝试在 Level 表配置 time 列增加挑战。");
+                TrySetFinishText(root, "txt_hint", "可在关卡 content JSON 中设置 time 或 timeLimitSeconds（秒）开启倒计时。");
             }
         }
         else
