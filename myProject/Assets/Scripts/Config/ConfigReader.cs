@@ -76,7 +76,7 @@ namespace VitaMj.Config
             return true;
         }
 
-        /// <summary>返回某表已加载后的行数（独立 tag 个数）；加载失败时为 0。</summary>
+        /// <summary>返回某表行数（独立 tag 个数）；加载失败时为 0。</summary>
         public static int GetRowCount(string tableKey)
         {
             return Instance.TryGetRows(tableKey, out Dictionary<string, JObject> rows) && rows != null ? rows.Count : 0;
