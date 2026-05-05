@@ -57,6 +57,12 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     UIPanel mainUIPanel;
 
+    [SerializeField]
+    bool playStartupBackgroundMusic = true;
+
+    [SerializeField]
+    string startupBackgroundMusicTag = "main_bgm";
+
     MainUIView _mainUIView;
     LevelUIView _levelUIView;
     GameUIView _gameUIView;
@@ -83,6 +89,13 @@ public sealed class GameUIManager : MonoBehaviour
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
+    }
+
+    void Start()
+    {
+        if (playStartupBackgroundMusic &&
+            !string.IsNullOrEmpty(startupBackgroundMusicTag))
+            AudioManager.Instance.PlayMusicByTag(startupBackgroundMusicTag, true);
     }
 
     /// <summary>
