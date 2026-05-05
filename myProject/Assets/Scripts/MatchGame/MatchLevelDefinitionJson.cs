@@ -18,6 +18,7 @@ namespace VitaMj.MatchGame
         public int valueMin = 1;
         public int valueMax = 12;
         public int randomSeed;
+        public int timeLimitSeconds;
         public MatchLevelCardRowJson[] cards;
     }
 
@@ -68,6 +69,7 @@ namespace VitaMj.MatchGame
             target.valueMin = dto.valueMin;
             target.valueMax = dto.valueMax;
             target.randomSeed = dto.randomSeed;
+            target.timeLimitSeconds = dto.timeLimitSeconds;
 
             target.cards ??= new List<MatchLevelCardRow>();
             target.cards.Clear();

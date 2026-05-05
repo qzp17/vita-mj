@@ -17,6 +17,12 @@ using ConfigLevelRow = VitaMj.Config.LevelConfigRow;
 [DisallowMultipleComponent]
 public sealed class GameUIManager : MonoBehaviour
 {
+    enum LevelFinishKind
+    {
+        Win,
+        TimeUp,
+    }
+
     public static GameUIManager Instance { get; private set; }
 
     [Tooltip("与 UIPanel.packagePath 一致，用于运行时 EnsurePackage")]
@@ -38,6 +44,18 @@ public sealed class GameUIManager : MonoBehaviour
     [Tooltip("finish_popup 内返回选关的按钮名；留空则依次尝试 btn_back、btn_confirm、btn_ok、n0")]
     [SerializeField]
     string finishPopupBackButtonName = "";
+
+    [Tooltip("finish_popup「再玩一局」按钮名；留空则尝试 btn_retry、btn_again、retry、replay 等")]
+    [SerializeField]
+    string finishPopupRetryButtonName = "";
+
+    [Tooltip("finish_popup「下一关」按钮名；留空则尝试 btn_next、next、btn_continue 等")]
+    [SerializeField]
+    string finishPopupNextButtonName = "";
+
+    [Tooltip("finish_popup 上可选控制器名：0=胜利，1=失败/超时（无此控制器可留空）")]
+    [SerializeField]
+    string finishPopupStatusControllerName = "status";
 
     [Tooltip("棋盘每张卡片对应的 FairyGUI 组件名（Package1 内）")]
     [SerializeField]
@@ -80,6 +98,25 @@ public sealed class GameUIManager : MonoBehaviour
     EventCallback1 _finishPopupBackClickHandler;
     EventCallback1 _gameHelpClickHandler;
     EventCallback1 _gameQuitClickHandler;
+    EventCallback1 _finishRetryClickHandler;
+    EventCallback1 _finishNextClickHandler;
+
+    bool _gameEnded;
+
+    bool _levelCountdownActive;
+    float _countdownEndsAtUnscaled;
+    int _lastRenderedCountdownSec = -1;
+    int? _effectiveTimeLimitSeconds;
+    int? _replayTimeLimitSeconds;
+    string _replayLevelContentJson;
+    string _replayLevelTagDisplay;
+    MatchLevelDefinition _replayScriptableLevel;
+
+    /// <summary>true 表示当前对局为程序化默认棋盘，可再开一局同规则。</summary>
+    bool _replayProceduralDefault;
+
+    bool _finishHadTimeLimit;
+    int? _finishRemainSecondsSnapshot;
 
     /// <summary>当前 Level 表中行的顺序（与导出 Excel 行序一致），列表项索引与之对应。</summary>
     readonly System.Collections.Generic.List<string> _levelRowTagsOrdered = new System.Collections.Generic.List<string>();
@@ -98,6 +135,8 @@ public sealed class GameUIManager : MonoBehaviour
         _finishPopupBackClickHandler = OnFinishPopupBackClicked;
         _gameHelpClickHandler = OnGameHelpClicked;
         _gameQuitClickHandler = OnGameQuitClicked;
+        _finishRetryClickHandler = OnFinishRetryClicked;
+        _finishNextClickHandler = OnFinishNextClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
@@ -286,22 +325,37 @@ public sealed class GameUIManager : MonoBehaviour
         if (listIndex < 0)
             return;
 
-        if (LevelProgressStore.GetCellVisualState(listIndex) == LevelCellVisualState.Lock)
-            return;
+        _ = TryStartCampaignLevelAtListIndex(listIndex, logFailures: true);
+    }
 
+    /// <summary>
+    /// 按选关列表下标载入 JSON 关卡并进入对局（与列表点击相同校验）。
+    /// </summary>
+    /// <returns>是否已成功调用 <see cref="OpenGameView"/>。</returns>
+    bool TryStartCampaignLevelAtListIndex(int listIndex, bool logFailures)
+    {
+        if (listIndex < 0 || listIndex >= _levelRowTagsOrdered.Count)
+            return false;
+
+        if (LevelProgressStore.GetCellVisualState(listIndex) == LevelCellVisualState.Lock)
+            return false;
+
+        string tagKey = _levelRowTagsOrdered[listIndex];
         if (!ConfigReader.TryGetRow<ConfigLevelRow>(levelConfigTableKey, tagKey, out ConfigLevelRow cfg))
-            return;
+            return false;
 
         if (string.IsNullOrWhiteSpace(cfg.content))
         {
-            Debug.LogError($"[GameUIManager] 关卡 content 为空（tag={tagKey}）。");
-            return;
+            if (logFailures)
+                Debug.LogError($"[GameUIManager] 关卡 content 为空（tag={tagKey}）。");
+            return false;
         }
 
         if (!TryParseLevelCell(cfg.level, out int levelNum))
         {
-            Debug.LogError($"[GameUIManager] 无法解析 level 列：「{cfg.level}」（tag={tagKey}）");
-            return;
+            if (logFailures)
+                Debug.LogError($"[GameUIManager] 无法解析 level 列：「{cfg.level}」（tag={tagKey}）");
+            return false;
         }
 
         MatchLevelDefinition def = null;
@@ -315,13 +369,44 @@ public sealed class GameUIManager : MonoBehaviour
             if (def != null)
                 Destroy(def);
 
-            Debug.LogError($"[GameUIManager] 关卡加载失败（{cfg.tag}/{levelNum}）：{ex.Message}");
-            return;
+            if (logFailures)
+                Debug.LogError($"[GameUIManager] 关卡加载失败（{cfg.tag}/{levelNum}）：{ex.Message}");
+            return false;
         }
+
+        int rowSec = cfg.time > 0 ? cfg.time : 0;
+        int jsonSec = def.timeLimitSeconds > 0 ? def.timeLimitSeconds : 0;
+        _effectiveTimeLimitSeconds = rowSec > 0 ? rowSec : (jsonSec > 0 ? jsonSec : (int?)null);
+        _replayTimeLimitSeconds = _effectiveTimeLimitSeconds;
+        _replayLevelContentJson = cfg.content;
+        _replayLevelTagDisplay = cfg.tag;
 
         _campaignLevelListIndex = listIndex;
         HideLevelViewForOverlay();
         OpenGameView(def, true);
+        return true;
+    }
+
+    bool CanGoToNextCampaignLevel()
+    {
+        if (_campaignLevelListIndex < 0)
+            return false;
+        int next = _campaignLevelListIndex + 1;
+        if (next >= _levelRowTagsOrdered.Count)
+            return false;
+        return LevelProgressStore.GetCellVisualState(next) != LevelCellVisualState.Lock;
+    }
+
+    void OnFinishNextClicked(EventContext _)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed || !CanGoToNextCampaignLevel())
+            return;
+
+        int nextIndex = _campaignLevelListIndex + 1;
+        _gameUIView.ClearPopups();
+
+        if (!TryStartCampaignLevelAtListIndex(nextIndex, logFailures: true))
+            Debug.LogWarning($"[GameUIManager] 无法进入下一关（index={nextIndex}）。");
     }
 
     static bool TryParseLevelCell(string levelStr, out int level)
@@ -458,12 +543,39 @@ public sealed class GameUIManager : MonoBehaviour
     /// <param name="destroyLevelWhenClosed">为 true 时须在关闭游戏时 Destroy（适用于 JSON 生成的运行时实例）；勿对资源资产设为 true。</param>
     public void OpenGameView(MatchLevelDefinition levelOverride = null, bool destroyLevelWhenClosed = false)
     {
+        _replayScriptableLevel = null;
+        _replayProceduralDefault = false;
+
         if (!destroyLevelWhenClosed || levelOverride == null)
+        {
             _campaignLevelListIndex = -1;
+            _replayLevelContentJson = null;
+            _replayLevelTagDisplay = null;
+            _replayTimeLimitSeconds = null;
+            _effectiveTimeLimitSeconds = null;
+        }
 
         EnsurePackageLoaded();
 
         MatchLevelDefinition def = levelOverride != null ? levelOverride : matchLevel;
+
+        if (def != null &&
+            def.timeLimitSeconds > 0 &&
+            (!_effectiveTimeLimitSeconds.HasValue || _effectiveTimeLimitSeconds.Value <= 0))
+            _effectiveTimeLimitSeconds = def.timeLimitSeconds;
+
+        // 结算「再玩一局」：JSON 关卡在 OnLevelListItemClick 已写入 *_replay*
+        if (string.IsNullOrEmpty(_replayLevelContentJson) &&
+            def != null &&
+            matchLevel != null &&
+            ReferenceEquals(def, matchLevel))
+        {
+            _replayScriptableLevel = matchLevel;
+            if (def.timeLimitSeconds > 0)
+                _replayTimeLimitSeconds = def.timeLimitSeconds;
+        }
+        else if (string.IsNullOrEmpty(_replayLevelContentJson) && def == null)
+            _replayProceduralDefault = true;
 
         if (_gameUIView != null && !_gameUIView.Root.isDisposed)
         {
@@ -477,6 +589,7 @@ public sealed class GameUIManager : MonoBehaviour
             _boardBinder = new LayeredMatchBoardBinder();
             _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
             BindGameToolbarIfPresent();
+            StartLevelSessionAfterBind();
             GRoot.inst.SetChildIndex(_gameUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
@@ -493,7 +606,7 @@ public sealed class GameUIManager : MonoBehaviour
             Debug.LogError($"[GameUIManager] 创建失败：{packageName}/{gameViewComponentName} 不存在或不是组件。");
             obj?.Dispose();
             DisposeOwnedMatchLevel();
-            _campaignLevelListIndex = -1;
+            ClearGameSessionSchedulingState(resetCampaignToo: true);
             BringLevelViewToFrontOnGRoot();
             RefreshUnderlayVisibility();
             return;
@@ -508,21 +621,34 @@ public sealed class GameUIManager : MonoBehaviour
         _boardBinder = new LayeredMatchBoardBinder();
         _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
         BindGameToolbarIfPresent();
+        StartLevelSessionAfterBind();
         RefreshUnderlayVisibility();
     }
 
     void OnMatchBoardCompleted()
     {
+        if (_gameEnded)
+            return;
+
+        _gameEnded = true;
+        _finishHadTimeLimit = _effectiveTimeLimitSeconds.HasValue && _effectiveTimeLimitSeconds.Value > 0;
+
+        _finishRemainSecondsSnapshot = !_finishHadTimeLimit
+            ? null
+            : Mathf.Max(0,
+                Mathf.CeilToInt(_countdownEndsAtUnscaled - Time.unscaledTime));
+        StopLevelCountdownState();
+
         if (_campaignLevelListIndex >= 0)
             LevelProgressStore.RegisterLevelCleared(_campaignLevelListIndex);
 
         if (_levelUIView?.LevelList != null)
             RefreshLevelCellsVisuals(_levelUIView.LevelList);
 
-        ShowFinishPopup();
+        ShowFinishPopup(LevelFinishKind.Win);
     }
 
-    void ShowFinishPopup()
+    void ShowFinishPopup(LevelFinishKind kind)
     {
         EnsurePackageLoaded();
         if (_gameUIView == null || _gameUIView.Root.isDisposed)
@@ -537,15 +663,290 @@ public sealed class GameUIManager : MonoBehaviour
             return;
         }
 
+        ApplyFinishPopupLayout(popupRoot, kind);
+
         var finishPopup = new FairyUIPopupHost(popupRoot);
         _gameUIView.PushPopup(finishPopup);
 
-        GButton btn = ResolveFinishPopupBackButton(finishPopup.Root);
-        if (btn != null)
-            btn.onClick.Add(_finishPopupBackClickHandler);
+        GButton back = ResolveFinishPopupBackButton(finishPopup.Root);
+        if (back != null)
+            back.onClick.Add(_finishPopupBackClickHandler);
         else
-            Debug.LogWarning("[GameUIManager] finish_popup 未找到返回按钮（可在 Inspector 填写 finishPopupBackButtonName）。");
+            Debug.LogWarning("[GameUIManager] finish_popup 未找到返回选关按钮（可设置 finishPopupBackButtonName 或使用 btn_back 等预设名）。");
+
+        GButton retry = ResolveFinishRetryButton(popupRoot);
+        if (retry != null)
+        {
+            bool canRetry = CanRetryCurrentLevel();
+            retry.visible = canRetry;
+            if (canRetry)
+                retry.onClick.Add(_finishRetryClickHandler);
+        }
+        else
+            Debug.LogWarning("[GameUIManager] finish_popup 未找到「再玩一局」按钮（可设置 finishPopupRetryButtonName 或使用 btn_retry 等预设名）。");
+
+        GButton nextBtn = ResolveFinishNextButton(popupRoot);
+        if (nextBtn != null)
+        {
+            bool showNext = kind == LevelFinishKind.Win && CanGoToNextCampaignLevel();
+            nextBtn.visible = showNext;
+            if (showNext)
+                nextBtn.onClick.Add(_finishNextClickHandler);
+        }
     }
+
+    bool CanRetryCurrentLevel() =>
+        !string.IsNullOrEmpty(_replayLevelContentJson) ||
+        _replayScriptableLevel != null ||
+        _replayProceduralDefault;
+
+    void ClearGameSessionSchedulingState(bool resetCampaignToo)
+    {
+        StopLevelCountdownState();
+        _gameEnded = false;
+        if (resetCampaignToo)
+            _campaignLevelListIndex = -1;
+        _effectiveTimeLimitSeconds = null;
+        _replayTimeLimitSeconds = null;
+        _replayLevelContentJson = null;
+        _replayLevelTagDisplay = null;
+        _replayScriptableLevel = null;
+        _replayProceduralDefault = false;
+    }
+
+    void StartLevelSessionAfterBind()
+    {
+        _gameEnded = false;
+        StartOrResetLevelCountdown();
+    }
+
+    void StartOrResetLevelCountdown()
+    {
+        StopLevelCountdownState();
+        _lastRenderedCountdownSec = -1;
+
+        if (!_effectiveTimeLimitSeconds.HasValue || _effectiveTimeLimitSeconds.Value <= 0)
+        {
+            SetGameTimeDisplayText("--:--");
+            return;
+        }
+
+        _levelCountdownActive = true;
+        _countdownEndsAtUnscaled = Time.unscaledTime + _effectiveTimeLimitSeconds.Value;
+        _lastRenderedCountdownSec = _effectiveTimeLimitSeconds.Value;
+        SetGameTimeDisplayText(FormatMmSs(_lastRenderedCountdownSec));
+    }
+
+    void StopLevelCountdownState()
+    {
+        _levelCountdownActive = false;
+    }
+
+    void SetGameTimeDisplayText(string s)
+    {
+        GTextField tf = _gameUIView?.TxtTime;
+        if (tf != null && !tf.isDisposed)
+            tf.text = s ?? string.Empty;
+    }
+
+    static string FormatMmSs(int totalSeconds)
+    {
+        totalSeconds = Mathf.Max(0, totalSeconds);
+        int m = totalSeconds / 60;
+        int sec = totalSeconds % 60;
+        return $"{m}:{sec:00}";
+    }
+
+    void Update()
+    {
+        if (!_levelCountdownActive || _gameEnded)
+            return;
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        float remain = _countdownEndsAtUnscaled - Time.unscaledTime;
+        if (remain <= 0f)
+        {
+            SetGameTimeDisplayText("0:00");
+            OnLevelTimeUp();
+            return;
+        }
+
+        int ceil = Mathf.CeilToInt(remain);
+        if (ceil != _lastRenderedCountdownSec)
+        {
+            _lastRenderedCountdownSec = ceil;
+            SetGameTimeDisplayText(FormatMmSs(ceil));
+        }
+    }
+
+    void OnLevelTimeUp()
+    {
+        if (!_levelCountdownActive || _gameEnded)
+            return;
+
+        _gameEnded = true;
+        _levelCountdownActive = false;
+
+        _finishHadTimeLimit = true;
+        _finishRemainSecondsSnapshot = 0;
+
+        _boardBinder?.SetBoardInteractionLocked(true);
+        ShowFinishPopup(LevelFinishKind.TimeUp);
+    }
+
+    void ApplyFinishPopupLayout(GComponent root, LevelFinishKind kind)
+    {
+        if (!string.IsNullOrEmpty(finishPopupStatusControllerName))
+        {
+            Controller ctrl = root.GetController(finishPopupStatusControllerName);
+            if (ctrl != null)
+                ctrl.selectedIndex = kind == LevelFinishKind.Win ? 0 : 1;
+        }
+
+        TrySetFinishText(root, "txt_title",
+            kind == LevelFinishKind.Win ? "闯关成功" : "挑战结束 · 超时");
+
+        TrySetFinishText(root, "txt_subtitle",
+            kind == LevelFinishKind.Win ? "你已消除全部卡牌。" : "本关倒计时已用尽。");
+
+        if (kind == LevelFinishKind.Win)
+        {
+            if (_finishHadTimeLimit && _finishRemainSecondsSnapshot.HasValue)
+            {
+                TrySetFinishText(root, "txt_stats", $"剩余时间 {FormatMmSs(_finishRemainSecondsSnapshot.Value)}");
+                TrySetFinishText(root, "txt_hint", "可返回选关或再玩一局刷新成绩。");
+            }
+            else
+            {
+                TrySetFinishText(root, "txt_stats", "本关未开启限时");
+                TrySetFinishText(root, "txt_hint", "可尝试在 Level 表配置 time 列增加挑战。");
+            }
+        }
+        else
+        {
+            int lim = _effectiveTimeLimitSeconds ?? _replayTimeLimitSeconds ?? 0;
+            TrySetFinishText(root, "txt_stats", $"本关限时 {FormatMmSs(lim)}");
+            TrySetFinishText(root, "txt_hint", "使用「提示」找可消对子，或重开本关。");
+        }
+
+        TrySetFinishText(root, "txt_level",
+            string.IsNullOrEmpty(_replayLevelTagDisplay) ? "" : $"当前：{_replayLevelTagDisplay}");
+    }
+
+    static void TrySetFinishText(GComponent root, string childName, string text)
+    {
+        if (root == null || string.IsNullOrEmpty(childName))
+            return;
+        GTextField tf = root.GetChild(childName)?.asTextField;
+        if (tf != null && !tf.isDisposed)
+            tf.text = text ?? string.Empty;
+    }
+
+    void OnFinishRetryClicked(EventContext _)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed || !CanRetryCurrentLevel())
+            return;
+
+        _gameUIView.ClearPopups();
+
+        try
+        {
+            if (!string.IsNullOrEmpty(_replayLevelContentJson))
+            {
+                MatchLevelDefinition def = MatchLevelDefinitionFromJson.Create(_replayLevelContentJson);
+                Destroy(_ownedMatchLevelInstance);
+                _ownedMatchLevelInstance = def;
+
+                _boardBinder?.Dispose();
+                _boardBinder = new LayeredMatchBoardBinder();
+                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+
+                ApplyEffectiveLimitAfterRetry(def);
+            }
+            else if (_replayScriptableLevel != null)
+            {
+                DisposeOwnedMatchLevel();
+                MatchLevelDefinition def = _replayScriptableLevel;
+
+                _boardBinder?.Dispose();
+                _boardBinder = new LayeredMatchBoardBinder();
+                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+
+                ApplyEffectiveLimitAfterRetry(def);
+            }
+            else if (_replayProceduralDefault)
+            {
+                DisposeOwnedMatchLevel();
+
+                _boardBinder?.Dispose();
+                _boardBinder = new LayeredMatchBoardBinder();
+                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, null, OnMatchBoardCompleted);
+
+                _effectiveTimeLimitSeconds = _replayTimeLimitSeconds;
+            }
+
+            StartLevelSessionAfterBind();
+            BindGameToolbarIfPresent();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[GameUIManager] 再玩一次加载失败：{ex.Message}");
+        }
+    }
+
+    void ApplyEffectiveLimitAfterRetry(MatchLevelDefinition def)
+    {
+        _effectiveTimeLimitSeconds = _replayTimeLimitSeconds;
+        if (def != null &&
+            def.timeLimitSeconds > 0 &&
+            (!_effectiveTimeLimitSeconds.HasValue || _effectiveTimeLimitSeconds.Value <= 0))
+            _effectiveTimeLimitSeconds = def.timeLimitSeconds;
+    }
+
+    static GButton ResolveFinishRetryButton(GComponent popup, string preferredName)
+    {
+        if (!string.IsNullOrEmpty(preferredName))
+        {
+            GObject g = popup.GetChild(preferredName);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        foreach (string name in new[] { "btn_retry", "btn_again", "retry", "btn_replay", "replay" })
+        {
+            GObject g = popup.GetChild(name);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        return null;
+    }
+
+    GButton ResolveFinishRetryButton(GComponent popup) =>
+        ResolveFinishRetryButton(popup, finishPopupRetryButtonName);
+
+    static GButton ResolveFinishNextButton(GComponent popup, string preferredName)
+    {
+        if (!string.IsNullOrEmpty(preferredName))
+        {
+            GObject g = popup.GetChild(preferredName);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        foreach (string name in new[] { "btn_next", "next", "btn_continue", "continue", "forward" })
+        {
+            GObject g = popup.GetChild(name);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        return null;
+    }
+
+    GButton ResolveFinishNextButton(GComponent popup) =>
+        ResolveFinishNextButton(popup, finishPopupNextButtonName);
 
     static GButton ResolveFinishPopupBackButton(GComponent popup, string preferredName)
     {
@@ -585,6 +986,9 @@ public sealed class GameUIManager : MonoBehaviour
     /// </summary>
     public void CloseGameView()
     {
+        StopLevelCountdownState();
+        _gameEnded = false;
+
         TearDownBoard();
         DisposeOwnedMatchLevel();
 
@@ -602,6 +1006,11 @@ public sealed class GameUIManager : MonoBehaviour
         _gameUIView = null;
 
         _campaignLevelListIndex = -1;
+        _replayLevelContentJson = null;
+        _replayLevelTagDisplay = null;
+        _replayTimeLimitSeconds = null;
+        _replayScriptableLevel = null;
+        _replayProceduralDefault = false;
 
         BringLevelViewToFrontOnGRoot();
         if (_levelUIView != null && !_levelUIView.Root.isDisposed && _levelUIView.LevelList != null &&

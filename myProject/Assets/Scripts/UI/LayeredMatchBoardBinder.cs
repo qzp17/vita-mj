@@ -36,6 +36,13 @@ public sealed class LayeredMatchBoardBinder
 
     public IPairMatchGame Model => _model;
 
+    /// <summary>对局结束（如超时）时锁定全部卡片点击，不改变消除状态。</summary>
+    public void SetBoardInteractionLocked(bool locked)
+    {
+        _boardLocked = locked;
+        RefreshAllCards();
+    }
+
     /// <summary>FairyGUI 里用于摆放卡片的容器；建议在 game_view 中建名为 card_holder 的空组件。</summary>
     public const string HolderChildName = "card_holder";
 

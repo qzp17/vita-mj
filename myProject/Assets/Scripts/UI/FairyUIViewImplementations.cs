@@ -33,4 +33,6 @@ public sealed class GameUIView : FairyUIViewBase
     public GButton BtnHelp => Root.GetChild("btn_help")?.asButton;
 
     public GButton BtnQuit => Root.GetChild("btn_quit")?.asButton;
+
+    public GTextField TxtTime => Root.GetChild("txt_time")?.asTextField;
 }
