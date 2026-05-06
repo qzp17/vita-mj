@@ -61,7 +61,18 @@ public sealed class LayeredMatchBoardBinder
     GButton _btnRevert;
     EventCallback _revertClickHandler;
 
+    bool _cardEntranceActive;
+    int _cardEntranceTweensRemain;
+    System.Action _onBoardEntranceComplete;
+    float _cardEntranceMoveDuration = 0.42f;
+    float _cardEntranceStagger = 0.05f;
+
     public IPairMatchGame Model => _model;
+
+    bool BlockGameplayInput =>
+        _boardLocked ||
+        (_model != null && _model.MatchBarCapacity > 0 && _activeBarFlights > 0) ||
+        _cardEntranceActive;
 
     /// <summary>对局结束（如超时）时锁定全部卡片点击，不改变消除状态。</summary>
     public void SetBoardInteractionLocked(bool locked)
@@ -78,6 +89,10 @@ public sealed class LayeredMatchBoardBinder
     /// <param name="onMatchBarOverflow">收纳栏已满时再点可行格时触发对局失败（仅关卡 queueMaxSlots &gt; 0 时需要）。</param>
     /// <param name="matchBarDockPanelName">收纳栏锚点 panel（game_view 子节点），第一张牌左上角与之对齐；留空则栏位排在棋盘下方。</param>
     /// <param name="matchBarFlySeconds">入栏飞行动画时长（秒）。</param>
+    /// <param name="enableCardBoardEntrance">开局是否播放卡牌从左/右侧错落飞入棋盘。</param>
+    /// <param name="cardEntranceMoveSeconds">单张卡牌水平飞入耗时（秒）。</param>
+    /// <param name="cardEntranceStaggerSeconds">相邻启动的时间间隔基底（秒内加随机错峰）。</param>
+    /// <param name="onBoardEntranceComplete">全部落定后可点击并接受倒计时；需在关内限时前调用。</param>
     public void Bind(
         GComponent gameViewRoot,
         string packageName,
@@ -89,7 +104,11 @@ public sealed class LayeredMatchBoardBinder
         MatchPlayStyle playStyle = MatchPlayStyle.ClassicPairClick,
         int proceduralQueueMaxSlots = ConfiguredPairMatchGame.DefaultQueueSlotsWhenConfigZero,
         string matchBarDockPanelName = null,
-        float matchBarFlySeconds = 0.35f)
+        float matchBarFlySeconds = 0.35f,
+        bool enableCardBoardEntrance = true,
+        float cardEntranceMoveSeconds = 0.42f,
+        float cardEntranceStaggerSeconds = 0.05f,
+        System.Action onBoardEntranceComplete = null)
     {
         Dispose();
         _gameViewRoot = gameViewRoot;
@@ -98,6 +117,9 @@ public sealed class LayeredMatchBoardBinder
         _gap = cellGap;
         _onBoardComplete = onBoardComplete;
         _onMatchBarOverflow = onMatchBarOverflow;
+        _onBoardEntranceComplete = onBoardEntranceComplete;
+        _cardEntranceMoveDuration = Mathf.Max(0.05f, cardEntranceMoveSeconds);
+        _cardEntranceStagger = Mathf.Max(0f, cardEntranceStaggerSeconds);
         _barFlyDuration = Mathf.Max(0.05f, matchBarFlySeconds);
 
         if (!string.IsNullOrEmpty(matchBarDockPanelName))
@@ -126,6 +148,7 @@ public sealed class LayeredMatchBoardBinder
             Debug.LogError($"[LayeredMatchBoardBinder] 无法创建 {packageName}/{cardComponentName}，请确认 FairyGUI 已导出该组件。");
             templateProbe?.Dispose();
             _model = null;
+            InvokeBoardEntranceCompleteCallback();
             return;
         }
 
@@ -133,10 +156,16 @@ public sealed class LayeredMatchBoardBinder
         float cellH = templateProbe.sourceHeight > 1 ? templateProbe.sourceHeight : templateProbe.height;
         templateProbe.Dispose();
 
+        _cardW = cellW;
+        _cardH = cellH;
         float stepX = cellW + _gap;
         float stepY = cellH + _gap;
         float layerShiftX = stepX * 0.5f;
         float layerShiftY = stepY * 0.5f;
+        _stepX = stepX;
+        _stepY = stepY;
+        _layerShiftX = layerShiftX;
+        _layerShiftY = layerShiftY;
 
         ComputeGridFootprint(_model, out _rowCount, out _colCount);
         _gridW0 = _colCount * cellW + (_colCount - 1) * _gap;
@@ -168,7 +197,16 @@ public sealed class LayeredMatchBoardBinder
             }
 
             card.data = cell.Id;
-            ApplyInitialBoardLayout(card, cell);
+
+            Vector2 settle = ComputeBoardSlotLocal(cell);
+            if (!enableCardBoardEntrance || cardEntranceMoveSeconds <= 0f)
+                ApplyInitialBoardLayout(card, cell);
+            else
+            {
+                float rootW0 = ResolveStageWidth();
+                Vector2 startLocal = ComputeCardEntranceStartLocal(settle, rootW0, rootW0 * 0.5f);
+                card.SetXY(startLocal.x, startLocal.y);
+            }
 
             _holder.AddChild(card);
             _cards[cell.Id] = card;
@@ -180,8 +218,26 @@ public sealed class LayeredMatchBoardBinder
 
         BindRevertButton(gameViewRoot);
 
-        RefreshAllCards();
-        RefreshRevertButtonState();
+        bool playEntrance = enableCardBoardEntrance &&
+                            _cardEntranceMoveDuration > 0f &&
+                            _cards.Count > 0;
+        if (playEntrance)
+            StartBoardEntranceAnimations(sortedCells);
+        else
+        {
+            foreach (var kv in _cards)
+            {
+                if (kv.Value == null || kv.Value.isDisposed)
+                    continue;
+                var bc = _model.GetCell(kv.Key);
+                if (!bc.Eliminated)
+                    ApplyInitialBoardLayout(kv.Value, bc);
+            }
+            _cardEntranceActive = false;
+            RefreshAllCards();
+            RefreshRevertButtonState();
+            InvokeBoardEntranceCompleteCallback();
+        }
 
         var tip = gameViewRoot.GetChild("txt_tip")?.asTextField;
         if (tip != null)
@@ -196,7 +252,7 @@ public sealed class LayeredMatchBoardBinder
     /// <summary>查找一对当面可消的相同牌并在二者上循环播放 <c>help</c> 动效。</summary>
     public void StartHintPairPulse()
     {
-        if (_model == null || _boardLocked)
+        if (_model == null || _boardLocked || _cardEntranceActive)
             return;
 
         StopHintPulseInternal();
@@ -361,6 +417,115 @@ public sealed class LayeredMatchBoardBinder
             GTween.Kill(card, TweenPropType.XY, false);
     }
 
+    float ResolveStageWidth()
+    {
+        if (GRoot.inst != null && GRoot.inst.width > 1f)
+            return GRoot.inst.width;
+        if (_gameViewRoot != null && !_gameViewRoot.isDisposed && _gameViewRoot.width > 1f)
+            return _gameViewRoot.width;
+        return Mathf.Max(Screen.width / Mathf.Max(UIContentScaler.scaleFactor, 0.01f), 1f);
+    }
+
+    Vector2 ComputeCardEntranceStartLocal(Vector2 settleLocal, float rootWidth, float halfWidth)
+    {
+        Vector2 global = _holder.LocalToGlobal(settleLocal);
+        float margin = Mathf.Max(_cardW * 1.15f, 40f);
+        bool fromLeft = global.x < halfWidth;
+        float gx = fromLeft ? -margin : rootWidth + margin;
+        Vector2 globalStart = new Vector2(gx, global.y);
+        return _holder.GlobalToLocal(globalStart);
+    }
+
+    static void ShuffleEntranceOrder(IList<LayeredGridCell> list)
+    {
+        for (int i = list.Count - 1; i > 0; i--)
+        {
+            int j = Random.Range(0, i + 1);
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+    }
+
+    void StartBoardEntranceAnimations(List<LayeredGridCell> sortedStable)
+    {
+        var order = new List<LayeredGridCell>(sortedStable);
+        ShuffleEntranceOrder(order);
+
+        float rootW = ResolveStageWidth();
+        float half = rootW * 0.5f;
+
+        _cardEntranceActive = true;
+        _cardEntranceTweensRemain = order.Count;
+
+        int k = 0;
+        foreach (var cell in order)
+        {
+            GComponent card = GetCard(cell.Id);
+            if (card == null || card.isDisposed)
+            {
+                OnEntranceTweenDone();
+                continue;
+            }
+
+            KillCardMovementTween(card);
+
+            Vector2 settle = ComputeBoardSlotLocal(cell);
+            Vector2 start = ComputeCardEntranceStartLocal(settle, rootW, half);
+            card.SetXY(start.x, start.y);
+            card.visible = true;
+            card.touchable = false;
+            card.grayed = true;
+            card.sortingOrder = BoardCardSortingOrder;
+
+            float jitter = Mathf.Max(_cardEntranceStagger * 0.85f, 0.018f);
+            float delay = k * _cardEntranceStagger + Random.Range(0f, jitter);
+            k++;
+
+            Vector2 settleCopy = settle;
+            card.TweenMove(settleCopy, _cardEntranceMoveDuration)
+                .SetDelay(delay)
+                .SetEase(EaseType.CubicOut)
+                .OnComplete(() => OnEntranceTweenDone());
+        }
+
+        RefreshRevertButtonState();
+    }
+
+    void OnEntranceTweenDone()
+    {
+        if (!_cardEntranceActive)
+            return;
+        _cardEntranceTweensRemain--;
+        if (_cardEntranceTweensRemain <= 0)
+            FinishBoardEntranceAnimations();
+    }
+
+    void FinishBoardEntranceAnimations()
+    {
+        if (!_cardEntranceActive)
+            return;
+
+        foreach (var kv in _cards)
+        {
+            if (kv.Value == null || kv.Value.isDisposed)
+                continue;
+            var bc = _model?.GetCell(kv.Key);
+            if (bc != null && !bc.Eliminated && !_flightCellIds.Contains(kv.Key))
+                KillCardMovementTween(kv.Value);
+        }
+
+        _cardEntranceActive = false;
+        RefreshAllCards();
+        RefreshRevertButtonState();
+        InvokeBoardEntranceCompleteCallback();
+    }
+
+    void InvokeBoardEntranceCompleteCallback()
+    {
+        System.Action cb = _onBoardEntranceComplete;
+        _onBoardEntranceComplete = null;
+        cb?.Invoke();
+    }
+
     /// <summary>点击可能落在 loader / 文本上，沿 parent 找到挂了 cell.Id 的 card。</summary>
     static bool TryResolveCellId(GObject sender, out int cellId)
     {
@@ -401,10 +566,7 @@ public sealed class LayeredMatchBoardBinder
 
     void OnCardClick(EventContext context)
     {
-        if (_model == null || context.sender == null || _boardLocked)
-            return;
-
-        if (_model.MatchBarCapacity > 0 && _activeBarFlights > 0)
+        if (_model == null || context.sender == null || BlockGameplayInput)
             return;
 
         if (!TryResolveCellId(context.sender as GObject, out int cellId))
@@ -559,7 +721,7 @@ public sealed class LayeredMatchBoardBinder
 
     void OnRevertClicked(EventContext _)
     {
-        if (_model == null || _boardLocked)
+        if (_model == null || _boardLocked || _cardEntranceActive)
             return;
         if (_model.MatchBarCapacity <= 0)
             return;
@@ -592,7 +754,7 @@ public sealed class LayeredMatchBoardBinder
             return;
 
         int n = _model.MatchBarCellIds.Count;
-        bool can = n > 0 && !_boardLocked;
+        bool can = n > 0 && !_boardLocked && !_cardEntranceActive;
         _btnRevert.grayed = n == 0;
         _btnRevert.touchable = can;
     }
@@ -613,6 +775,9 @@ public sealed class LayeredMatchBoardBinder
     void RefreshAllCards()
     {
         if (_model == null)
+            return;
+
+        if (_cardEntranceActive)
             return;
 
         bool barMode = _model.MatchBarCapacity > 0;
@@ -762,6 +927,8 @@ public sealed class LayeredMatchBoardBinder
     public void Dispose()
     {
         _boardLocked = false;
+        _onBoardEntranceComplete = null;
+        _cardEntranceActive = false;
 
         StopHintPulseInternal();
 

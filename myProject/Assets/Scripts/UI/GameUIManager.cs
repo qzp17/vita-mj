@@ -106,6 +106,18 @@ public sealed class GameUIManager : MonoBehaviour
     [Min(0.05f)]
     float matchBarFlyDurationSeconds = 0.35f;
 
+    [Tooltip("开局卡牌从屏幕左右水平飞入棋盘，错落启动")]
+    [SerializeField]
+    bool enableCardBoardEntrance = true;
+
+    [SerializeField]
+    [Min(0.05f)]
+    float cardEntranceMoveSeconds = 0.42f;
+
+    [SerializeField]
+    [Min(0f)]
+    float cardEntranceStaggerSeconds = 0.055f;
+
     [Tooltip("选关列表：ConfigReader 表名，与 Assets/Config 下 xlsx 文件名一致（不含扩展名），如 Level → Resources/ExportConfig/Level.bytes")]
     [SerializeField]
     string levelConfigTableKey = "Level";
@@ -787,9 +799,12 @@ public sealed class GameUIManager : MonoBehaviour
             style,
             proceduralQueueMaxSlotsFallback,
             matchBarDockPanelName,
-            matchBarFlyDurationSeconds);
+            matchBarFlyDurationSeconds,
+            enableCardBoardEntrance,
+            cardEntranceMoveSeconds,
+            cardEntranceStaggerSeconds,
+            StartLevelSessionAfterBind);
         BindGameToolbarIfPresent();
-        StartLevelSessionAfterBind();
     }
 
     void ResetPlayPickUiState()
