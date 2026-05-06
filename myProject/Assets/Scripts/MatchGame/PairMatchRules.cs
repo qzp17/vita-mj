@@ -26,12 +26,16 @@ namespace VitaMj.MatchGame
         /// <summary>
         /// 收纳栏：可点时入栏并离开棋盘；若栏尾与前一张牌面相同则两者从栏中移除（可连环）；栏已满时再点判定失败。
         /// </summary>
+        /// <param name="mergedAwayCollector">若非 null，会先 Clear，再在每次抵消时追加被移出收纳栏的一对 id（连环合并则可能多于 2 个）。</param>
         public static LayeredMatchClickResult TryMatchBarClick(
             IReadOnlyList<LayeredGridCell> cells,
             List<int> barCellIds,
             int barCapacity,
-            int cellId)
+            int cellId,
+            List<int> mergedAwayCollector = null)
         {
+            mergedAwayCollector?.Clear();
+
             if ((uint)cellId >= (uint)cells.Count)
                 return LayeredMatchClickResult.Invalid;
 
@@ -54,37 +58,8 @@ namespace VitaMj.MatchGame
 
                 barCellIds.RemoveAt(barCellIds.Count - 1);
                 barCellIds.RemoveAt(barCellIds.Count - 1);
-                merged = true;
-            }
-
-        public static LayeredMatchClickResult TryMatchBarClick(
-            IReadOnlyList<LayeredGridCell> cells,
-            List<int> barCellIds,
-            int barCapacity,
-            int cellId)
-        {
-            if ((uint)cellId >= (uint)cells.Count)
-                return LayeredMatchClickResult.Invalid;
-
-            if (!CanClick(cells, cellId))
-                return LayeredMatchClickResult.Invalid;
-
-            if (barCellIds.Count >= barCapacity)
-                return LayeredMatchClickResult.MatchBarFullGameOver;
-
-            barCellIds.Add(cellId);
-            cells[cellId].Eliminated = true;
-
-            bool merged = false;
-            while (barCellIds.Count >= 2)
-            {
-                int a = barCellIds[barCellIds.Count - 2];
-                int b = barCellIds[barCellIds.Count - 1];
-                if (cells[a].Value != cells[b].Value)
-                    break;
-
-                barCellIds.RemoveAt(barCellIds.Count - 1);
-                barCellIds.RemoveAt(barCellIds.Count - 1);
+                mergedAwayCollector?.Add(a);
+                mergedAwayCollector?.Add(b);
                 merged = true;
             }
 

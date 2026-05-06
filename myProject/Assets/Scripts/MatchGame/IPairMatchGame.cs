@@ -15,6 +15,11 @@ namespace VitaMj.MatchGame
         /// <summary>当前收纳栏中的格子 Id（从左到右）。</summary>
         IReadOnlyList<int> MatchBarCellIds { get; }
 
+        /// <summary>
+        /// 仅当最近一次 <see cref="TryClick"/> 返回 <see cref="LayeredMatchClickResult.MatchBarMerged"/> 时含本击中从收纳栏抵消的 id（连环合并时多于 2 个）；否则为空。
+        /// </summary>
+        IReadOnlyList<int> LastMatchBarMergedAwayCellIds { get; }
+
         LayeredGridCell GetCell(int id);
         bool CanClick(int cellId);
         LayeredMatchClickResult TryClick(int cellId);

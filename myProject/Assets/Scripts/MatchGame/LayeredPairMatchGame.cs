@@ -34,8 +34,11 @@ namespace VitaMj.MatchGame
         readonly Dictionary<(int layer, int row, int col), LayeredGridCell> _cellAt = new Dictionary<(int layer, int row, int col), LayeredGridCell>();
         readonly Random _rng;
         readonly List<int> _matchBar = new List<int>();
+        readonly List<int> _lastMatchBarMergedAway = new List<int>();
 
         int? _selectedId;
+
+        static readonly int[] EmptyCellIdList = Array.Empty<int>();
 
         public IReadOnlyList<LayeredGridCell> Cells => _cells;
         public int? SelectedCellId => _selectedId;
@@ -44,6 +47,10 @@ namespace VitaMj.MatchGame
         public int MatchBarCapacity { get; set; }
 
         public IReadOnlyList<int> MatchBarCellIds => _matchBar;
+
+        public IReadOnlyList<int> LastMatchBarMergedAwayCellIds =>
+            MatchBarCapacity > 0 ? _lastMatchBarMergedAway : EmptyCellIdList;
+
         /// <summary>最底层行数。</summary>
         public int RowCount { get; private set; }
         /// <summary>最底层列数。</summary>
@@ -226,9 +233,15 @@ namespace VitaMj.MatchGame
             if (MatchBarCapacity > 0)
             {
                 _selectedId = null;
-                return PairMatchRules.TryMatchBarClick(_cells, _matchBar, MatchBarCapacity, cellId);
+                _lastMatchBarMergedAway.Clear();
+                LayeredMatchClickResult r = PairMatchRules.TryMatchBarClick(
+                    _cells, _matchBar, MatchBarCapacity, cellId, _lastMatchBarMergedAway);
+                if (r != LayeredMatchClickResult.MatchBarMerged)
+                    _lastMatchBarMergedAway.Clear();
+                return r;
             }
 
+            _lastMatchBarMergedAway.Clear();
             return PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
         }
 

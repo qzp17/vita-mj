@@ -645,6 +645,8 @@ public sealed class LayeredMatchBoardBinder
 
             case LayeredMatchClickResult.MatchBarMerged:
                 StopHintPulseInternal();
+                foreach (int mid in _model.LastMatchBarMergedAwayCellIds)
+                    CardShatterParticles.PlayAtCard(GetCard(mid));
                 RefreshAllCards();
                 RefreshRevertButtonState();
                 if (_model != null && _model.IsComplete)
@@ -877,6 +879,12 @@ public sealed class LayeredMatchBoardBinder
 
         StopTransitionIfPlaying(cA, TrSelect);
         StopTransitionIfPlaying(cB, TrSelect);
+
+        if (transitionName == TrSucc)
+        {
+            CardShatterParticles.PlayAtCard(cA);
+            CardShatterParticles.PlayAtCard(cB);
+        }
 
         _boardLocked = true;
 

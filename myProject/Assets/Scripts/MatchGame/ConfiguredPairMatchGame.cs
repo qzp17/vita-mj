@@ -14,7 +14,10 @@ namespace VitaMj.MatchGame
         readonly Dictionary<string, int> _designerIdToRuntimeId = new Dictionary<string, int>(StringComparer.Ordinal);
         readonly Random _rng;
         readonly List<int> _matchBar = new List<int>();
+        readonly List<int> _lastMatchBarMergedAway = new List<int>();
         readonly MatchPlayStyle _playStyle;
+
+        static readonly int[] EmptyCellIdList = Array.Empty<int>();
 
         int _configuredQueueSlots;
         int _matchBarCapacity;
@@ -28,6 +31,9 @@ namespace VitaMj.MatchGame
         public int MatchBarCapacity => _matchBarCapacity;
 
         public IReadOnlyList<int> MatchBarCellIds => _matchBar;
+
+        public IReadOnlyList<int> LastMatchBarMergedAwayCellIds =>
+            _matchBarCapacity > 0 ? _lastMatchBarMergedAway : EmptyCellIdList;
 
         public bool IsComplete
         {
@@ -266,9 +272,15 @@ namespace VitaMj.MatchGame
             if (_matchBarCapacity > 0)
             {
                 _selectedId = null;
-                return PairMatchRules.TryMatchBarClick(_cells, _matchBar, _matchBarCapacity, cellId);
+                _lastMatchBarMergedAway.Clear();
+                LayeredMatchClickResult r = PairMatchRules.TryMatchBarClick(
+                    _cells, _matchBar, _matchBarCapacity, cellId, _lastMatchBarMergedAway);
+                if (r != LayeredMatchClickResult.MatchBarMerged)
+                    _lastMatchBarMergedAway.Clear();
+                return r;
             }
 
+            _lastMatchBarMergedAway.Clear();
             return PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
         }
 
