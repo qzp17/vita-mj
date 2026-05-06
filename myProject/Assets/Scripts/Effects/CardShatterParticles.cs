@@ -38,7 +38,10 @@ public static class CardShatterParticles
             boxW = boxH = 0.25f;
         }
 
-        Spawn(worldCenter, boxW, boxH);
+        if (MahjongBaoshiShardParticles.TryPlay(worldCenter, boxW, boxH, ResolveShardMaterial()))
+            return;
+
+        SpawnBillboardFallback(worldCenter, boxW, boxH);
     }
 
     static bool TryGetWorldExtents(GComponent card, out Vector3 worldCenter, out float boxW, out float boxH)
@@ -64,7 +67,7 @@ public static class CardShatterParticles
         return true;
     }
 
-    static void Spawn(Vector3 worldCenter, float worldW, float worldH)
+    static void SpawnBillboardFallback(Vector3 worldCenter, float worldW, float worldH)
     {
         var go = new GameObject("CardShatterFx");
         go.transform.SetPositionAndRotation(worldCenter, Quaternion.identity);
