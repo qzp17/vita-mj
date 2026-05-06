@@ -13,11 +13,21 @@ namespace VitaMj.MatchGame
             new Dictionary<(int layer, int row, int col), LayeredGridCell>();
         readonly Dictionary<string, int> _designerIdToRuntimeId = new Dictionary<string, int>(StringComparer.Ordinal);
         readonly Random _rng;
+        readonly List<int> _matchBar = new List<int>();
+        readonly MatchPlayStyle _playStyle;
 
+        int _configuredQueueSlots;
+        int _matchBarCapacity;
         int? _selectedId;
+
+        internal const int DefaultQueueSlotsWhenConfigZero = 7;
 
         public IReadOnlyList<LayeredGridCell> Cells => _cells;
         public int? SelectedCellId => _selectedId;
+
+        public int MatchBarCapacity => _matchBarCapacity;
+
+        public IReadOnlyList<int> MatchBarCellIds => _matchBar;
 
         public bool IsComplete
         {
@@ -33,10 +43,15 @@ namespace VitaMj.MatchGame
             }
         }
 
-        public ConfiguredPairMatchGame(MatchLevelDefinition definition, int? seedOverride = null)
+        public ConfiguredPairMatchGame(
+            MatchLevelDefinition definition,
+            MatchPlayStyle playStyle = MatchPlayStyle.ClassicPairClick,
+            int? seedOverride = null)
         {
             if (definition == null)
                 throw new ArgumentNullException(nameof(definition));
+
+            _playStyle = playStyle;
 
             int seed = seedOverride ?? (definition.randomSeed != 0 ? definition.randomSeed : Environment.TickCount);
             _rng = new Random(seed);
@@ -50,6 +65,8 @@ namespace VitaMj.MatchGame
             _cellAt.Clear();
             _designerIdToRuntimeId.Clear();
             _selectedId = null;
+            _matchBar.Clear();
+            _configuredQueueSlots = def.queueMaxSlots < 0 ? 0 : def.queueMaxSlots;
 
             var rows = def.cards;
             if (rows == null || rows.Count == 0)
@@ -85,6 +102,31 @@ namespace VitaMj.MatchGame
 
             WireBlockers(def);
             AssignFaces(def);
+            ApplyMatchPlayStyle();
+        }
+
+        void ApplyMatchPlayStyle()
+        {
+            _selectedId = null;
+            _matchBar.Clear();
+            switch (_playStyle)
+            {
+                case MatchPlayStyle.ClassicPairClick:
+                    _matchBarCapacity = 0;
+                    break;
+                case MatchPlayStyle.MatchBarQueue:
+                    _matchBarCapacity =
+                        _configuredQueueSlots > 0 ? _configuredQueueSlots : DefaultQueueSlotsWhenConfigZero;
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+
+            if (_cells.Count > 0)
+            {
+                for (int i = 0; i < _cells.Count; i++)
+                    _cells[i].Eliminated = false;
+            }
         }
 
         void WireBlockers(MatchLevelDefinition def)
@@ -154,8 +196,8 @@ namespace VitaMj.MatchGame
             }
 
             _selectedId = null;
-            for (int i = 0; i < _cells.Count; i++)
-                _cells[i].Eliminated = false;
+            _matchBar.Clear();
+            // Eliminated 与收纳栏重置由 Build 末尾 <see cref="ApplyMatchPlayStyle"/> 统一处理。
         }
 
         void AssignExplicitPairs(MatchLevelDefinition def)
@@ -219,7 +261,22 @@ namespace VitaMj.MatchGame
         public bool CanClick(int cellId) =>
             PairMatchRules.CanClick(_cells, cellId);
 
-        public LayeredMatchClickResult TryClick(int cellId) =>
-            PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
+        public LayeredMatchClickResult TryClick(int cellId)
+        {
+            if (_matchBarCapacity > 0)
+            {
+                _selectedId = null;
+                return PairMatchRules.TryMatchBarClick(_cells, _matchBar, _matchBarCapacity, cellId);
+            }
+
+            return PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
+        }
+
+        public bool TryRevertLastMatchBarEntry()
+        {
+            if (_matchBarCapacity <= 0)
+                return false;
+            return PairMatchRules.TryMatchBarRevert(_cells, _matchBar);
+        }
     }
 }

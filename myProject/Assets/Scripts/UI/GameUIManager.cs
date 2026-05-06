@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using FairyGUI;
 using UnityEngine;
@@ -21,6 +22,7 @@ public sealed class GameUIManager : MonoBehaviour
     {
         Win,
         TimeUp,
+        QueueFull,
     }
 
     public static GameUIManager Instance { get; private set; }
@@ -67,6 +69,43 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     float cardCellGap = 8f;
 
+    [Tooltip("进入对局前是否让玩家选择「双点消除」或「收纳栏」玩法；若在 game_view 中找不到可选 UI，则退回 fallback")]
+    [SerializeField]
+    bool offerMatchPlayStyleChoice = true;
+
+    [Tooltip("关卡未显示玩法选择或未配置按钮时使用")]
+    [SerializeField]
+    MatchPlayStyle fallbackMatchPlayStyle = MatchPlayStyle.ClassicPairClick;
+
+    [Tooltip("game_view 下用于放置两个选项按钮的组件名（可默认隐藏）；留空则不使用内嵌面板")]
+    [SerializeField]
+    string gameViewPlayPickPanelName = "play_mode_pick";
+
+    [Tooltip("game_view 无内嵌面板时尝试从 FairyGUI 包创建该组件名作为弹窗；留空跳过")]
+    [SerializeField]
+    string playStylePickFallbackPopupName = "";
+
+    [Tooltip("Classic 玩法按钮自定义名优先；为空则依次尝试预设名")]
+    [SerializeField]
+    string pickClassicPlayButtonPreferredName = "";
+
+    [Tooltip("收纳栏玩法按钮自定义名优先；为空则依次尝试预设名")]
+    [SerializeField]
+    string pickQueuePlayButtonPreferredName = "";
+
+    [Tooltip("程序化棋盘 + 收纳栏模式时的栏位长度（关卡 JSON 中 queueMaxSlots 仍优先生效）")]
+    [SerializeField]
+    [Min(2)]
+    int proceduralQueueMaxSlotsFallback = ConfiguredPairMatchGame.DefaultQueueSlotsWhenConfigZero;
+
+    [Tooltip("收纳栏首张牌左上角与 game_view 该子面板对齐（与棋盘同在 card_holder 坐标系下折算）；留空则排在棋盘下方")]
+    [SerializeField]
+    string matchBarDockPanelName = "match_bar_panel";
+
+    [SerializeField]
+    [Min(0.05f)]
+    float matchBarFlyDurationSeconds = 0.35f;
+
     [Tooltip("选关列表：ConfigReader 表名，与 Assets/Config 下 xlsx 文件名一致（不含扩展名），如 Level → Resources/ExportConfig/Level.bytes")]
     [SerializeField]
     string levelConfigTableKey = "Level";
@@ -93,6 +132,10 @@ public sealed class GameUIManager : MonoBehaviour
     LevelUIView _levelUIView;
     GameUIView _gameUIView;
     LayeredMatchBoardBinder _boardBinder;
+
+    readonly List<(GButton Button, EventCallback Handler)> _playPickHandlerRegs = new List<(GButton Button, EventCallback Handler)>();
+
+    GObject _floatingPlayPickRoot;
 
     /// <summary>由选关 JSON 生成的临时关卡，关闭游戏时需 Destroy。</summary>
     MatchLevelDefinition _ownedMatchLevelInstance;
@@ -453,7 +496,7 @@ public sealed class GameUIManager : MonoBehaviour
         try
         {
             def = MatchLevelDefinitionFromJson.Create(cfg.content);
-            _ = new ConfiguredPairMatchGame(def);
+            _ = new ConfiguredPairMatchGame(def, MatchPlayStyle.ClassicPairClick);
         }
         catch (Exception ex)
         {
@@ -671,21 +714,20 @@ public sealed class GameUIManager : MonoBehaviour
         {
             DisposeOwnedMatchLevel();
             TearDownBoard();
+            ResetPlayPickUiState();
 
             _gameUIView.ClearPopups();
 
             _ownedMatchLevelInstance = destroyLevelWhenClosed ? def : null;
 
-            _boardBinder = new LayeredMatchBoardBinder();
-            _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
-            BindGameToolbarIfPresent();
-            StartLevelSessionAfterBind();
+            BeginPlayStyleChoiceOrBindBoard(def);
             GRoot.inst.SetChildIndex(_gameUIView.Root, GRoot.inst.numChildren - 1);
             RefreshUnderlayVisibility();
             return;
         }
 
         TearDownBoard();
+        ResetPlayPickUiState();
         DisposeOwnedMatchLevel();
         _ownedMatchLevelInstance = destroyLevelWhenClosed ? def : null;
 
@@ -708,11 +750,192 @@ public sealed class GameUIManager : MonoBehaviour
         _gameUIView.Root.MakeFullScreen();
         _gameUIView.Root.AddRelation(GRoot.inst, RelationType.Size);
 
+        BeginPlayStyleChoiceOrBindBoard(def);
+        RefreshUnderlayVisibility();
+    }
+
+    void BeginPlayStyleChoiceOrBindBoard(MatchLevelDefinition def)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        if (!offerMatchPlayStyleChoice)
+        {
+            CompleteMatchBoardSetup(def, fallbackMatchPlayStyle);
+            return;
+        }
+
+        if (!TryAttachPlayStylePick(def))
+            CompleteMatchBoardSetup(def, fallbackMatchPlayStyle);
+    }
+
+    void CompleteMatchBoardSetup(MatchLevelDefinition def, MatchPlayStyle style)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+
+        TearDownBoard();
         _boardBinder = new LayeredMatchBoardBinder();
-        _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
+        _boardBinder.Bind(
+            _gameUIView.Root,
+            packageName,
+            cardComponentName,
+            cardCellGap,
+            def,
+            OnMatchBoardCompleted,
+            OnMatchBarOverflow,
+            style,
+            proceduralQueueMaxSlotsFallback,
+            matchBarDockPanelName,
+            matchBarFlyDurationSeconds);
         BindGameToolbarIfPresent();
         StartLevelSessionAfterBind();
-        RefreshUnderlayVisibility();
+    }
+
+    void ResetPlayPickUiState()
+    {
+        UnregisterPlayPickHandlers();
+        DisposeFloatingPlayPick();
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+        if (!string.IsNullOrEmpty(gameViewPlayPickPanelName))
+        {
+            GComponent embedded = _gameUIView.Root.GetChild(gameViewPlayPickPanelName)?.asCom;
+            if (embedded != null)
+                embedded.visible = false;
+        }
+
+        SetCardHolderVisible(true);
+    }
+
+    bool TryAttachPlayStylePick(MatchLevelDefinition def)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return false;
+
+        UnregisterPlayPickHandlers();
+        DisposeFloatingPlayPick();
+
+        GComponent anchor = TryResolvePlayPickAnchor();
+        if (anchor == null)
+            return false;
+
+        GButton classic = ResolvePlayPickButton(
+            anchor,
+            pickClassicPlayButtonPreferredName,
+            new[] { "btn_classic", "btn_double", "btn_pair", "mode_classic", "btn_mode_classic" });
+        GButton queue = ResolvePlayPickButton(
+            anchor,
+            pickQueuePlayButtonPreferredName,
+            new[] { "btn_queue", "btn_bar", "btn_matchbar", "mode_queue", "btn_mode_queue" });
+
+        if (classic == null || queue == null)
+        {
+            Debug.LogWarning("[GameUIManager] 玩法选择 UI 缺少按钮，已退回默认玩法。");
+            anchor.visible = false;
+            SetCardHolderVisible(true);
+            DisposeFloatingPlayPick();
+            return false;
+        }
+
+        SetCardHolderVisible(false);
+        anchor.visible = true;
+
+        void Pick(MatchPlayStyle style)
+        {
+            UnregisterPlayPickHandlers();
+            anchor.visible = false;
+            SetCardHolderVisible(true);
+            DisposeFloatingPlayPick();
+            CompleteMatchBoardSetup(def, style);
+        }
+
+        RegisterPlayPickClick(classic, _ => Pick(MatchPlayStyle.ClassicPairClick));
+        RegisterPlayPickClick(queue, _ => Pick(MatchPlayStyle.MatchBarQueue));
+        return true;
+    }
+
+    GComponent TryResolvePlayPickAnchor()
+    {
+        if (!string.IsNullOrEmpty(gameViewPlayPickPanelName))
+        {
+            GComponent embedded = _gameUIView.Root.GetChild(gameViewPlayPickPanelName)?.asCom;
+            if (embedded != null)
+                return embedded;
+        }
+
+        if (string.IsNullOrEmpty(playStylePickFallbackPopupName))
+            return null;
+
+        GObject obj = UIPackage.CreateObject(packageName, playStylePickFallbackPopupName);
+        var pop = obj as GComponent;
+        if (pop == null)
+        {
+            obj?.Dispose();
+            Debug.LogWarning($"[GameUIManager] 无法创建玩法弹窗 {packageName}/{playStylePickFallbackPopupName}");
+            return null;
+        }
+
+        _gameUIView.Root.AddChild(pop);
+        pop.SetXY(
+            Mathf.Max(0f, (_gameUIView.Root.width - pop.width) * 0.5f),
+            Mathf.Max(0f, (_gameUIView.Root.height - pop.height) * 0.5f));
+        _floatingPlayPickRoot = pop;
+        return pop;
+    }
+
+    static GButton ResolvePlayPickButton(GComponent root, string preferred, string[] fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(preferred))
+        {
+            GObject g = root.GetChild(preferred.Trim());
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        foreach (string name in fallback)
+        {
+            GObject g = root.GetChild(name);
+            if (g != null && g.asButton != null)
+                return g.asButton;
+        }
+
+        return null;
+    }
+
+    void RegisterPlayPickClick(GButton btn, EventCallback handler)
+    {
+        btn.onClick.Add(handler);
+        _playPickHandlerRegs.Add((btn, handler));
+    }
+
+    void UnregisterPlayPickHandlers()
+    {
+        for (int i = 0; i < _playPickHandlerRegs.Count; i++)
+        {
+            (GButton button, EventCallback handler) = _playPickHandlerRegs[i];
+            button?.onClick.Remove(handler);
+        }
+
+        _playPickHandlerRegs.Clear();
+    }
+
+    void DisposeFloatingPlayPick()
+    {
+        if (_floatingPlayPickRoot != null && !_floatingPlayPickRoot.isDisposed)
+        {
+            _floatingPlayPickRoot.Dispose();
+            _floatingPlayPickRoot = null;
+        }
+    }
+
+    void SetCardHolderVisible(bool visible)
+    {
+        if (_gameUIView == null || _gameUIView.Root.isDisposed)
+            return;
+        GObject holder = _gameUIView.Root.GetChild(LayeredMatchBoardBinder.HolderChildName);
+        if (holder != null)
+            holder.visible = visible;
     }
 
     void OnMatchBoardCompleted()
@@ -885,6 +1108,22 @@ public sealed class GameUIManager : MonoBehaviour
         ShowFinishPopup(LevelFinishKind.TimeUp);
     }
 
+    void OnMatchBarOverflow()
+    {
+        if (_gameEnded)
+            return;
+
+        _gameEnded = true;
+        _finishHadTimeLimit = _effectiveTimeLimitSeconds.HasValue && _effectiveTimeLimitSeconds.Value > 0;
+        _finishRemainSecondsSnapshot = !_finishHadTimeLimit
+            ? null
+            : Mathf.Max(0, Mathf.CeilToInt(_countdownEndsAtUnscaled - Time.unscaledTime));
+        StopLevelCountdownState();
+
+        _boardBinder?.SetBoardInteractionLocked(true);
+        ShowFinishPopup(LevelFinishKind.QueueFull);
+    }
+
     void ApplyFinishPopupLayout(GComponent root, LevelFinishKind kind)
     {
         if (!string.IsNullOrEmpty(finishPopupStatusControllerName))
@@ -894,14 +1133,10 @@ public sealed class GameUIManager : MonoBehaviour
                 ctrl.selectedIndex = kind == LevelFinishKind.Win ? 0 : 1;
         }
 
-        TrySetFinishText(root, "txt_title",
-            kind == LevelFinishKind.Win ? "闯关成功" : "挑战结束 · 超时");
-
-        TrySetFinishText(root, "txt_subtitle",
-            kind == LevelFinishKind.Win ? "你已消除全部卡牌。" : "本关倒计时已用尽。");
-
         if (kind == LevelFinishKind.Win)
         {
+            TrySetFinishText(root, "txt_title", "闯关成功");
+            TrySetFinishText(root, "txt_subtitle", "你已消除全部卡牌。");
             if (_finishHadTimeLimit && _finishRemainSecondsSnapshot.HasValue)
             {
                 TrySetFinishText(root, "txt_stats", $"剩余时间 {FormatMmSs(_finishRemainSecondsSnapshot.Value)}");
@@ -913,11 +1148,20 @@ public sealed class GameUIManager : MonoBehaviour
                 TrySetFinishText(root, "txt_hint", "可在关卡 content JSON 中设置 time 或 timeLimitSeconds（秒）开启倒计时。");
             }
         }
-        else
+        else if (kind == LevelFinishKind.TimeUp)
         {
+            TrySetFinishText(root, "txt_title", "挑战结束 · 超时");
+            TrySetFinishText(root, "txt_subtitle", "本关倒计时已用尽。");
             int lim = _effectiveTimeLimitSeconds ?? _replayTimeLimitSeconds ?? 0;
             TrySetFinishText(root, "txt_stats", $"本关限时 {FormatMmSs(lim)}");
             TrySetFinishText(root, "txt_hint", "使用「提示」找可消对子，或重开本关。");
+        }
+        else
+        {
+            TrySetFinishText(root, "txt_title", "挑战失败 · 栏位已满");
+            TrySetFinishText(root, "txt_subtitle", "收纳栏已达上限，无法再移入卡牌。");
+            TrySetFinishText(root, "txt_stats", "请合理规划入栏顺序，或重开本关。");
+            TrySetFinishText(root, "txt_hint", "可在关卡 content JSON 中设置 queueMaxSlots 或 queueMax 调整栏位长度。");
         }
 
         TrySetFinishText(root, "txt_level",
@@ -942,6 +1186,8 @@ public sealed class GameUIManager : MonoBehaviour
 
         try
         {
+            _gameEnded = false;
+
             if (!string.IsNullOrEmpty(_replayLevelContentJson))
             {
                 MatchLevelDefinition def = MatchLevelDefinitionFromJson.Create(_replayLevelContentJson);
@@ -949,10 +1195,10 @@ public sealed class GameUIManager : MonoBehaviour
                 _ownedMatchLevelInstance = def;
 
                 _boardBinder?.Dispose();
-                _boardBinder = new LayeredMatchBoardBinder();
-                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
-
+                _boardBinder = null;
                 ApplyEffectiveLimitAfterRetry(def);
+                ResetPlayPickUiState();
+                BeginPlayStyleChoiceOrBindBoard(def);
             }
             else if (_replayScriptableLevel != null)
             {
@@ -960,24 +1206,21 @@ public sealed class GameUIManager : MonoBehaviour
                 MatchLevelDefinition def = _replayScriptableLevel;
 
                 _boardBinder?.Dispose();
-                _boardBinder = new LayeredMatchBoardBinder();
-                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, def, OnMatchBoardCompleted);
-
+                _boardBinder = null;
                 ApplyEffectiveLimitAfterRetry(def);
+                ResetPlayPickUiState();
+                BeginPlayStyleChoiceOrBindBoard(def);
             }
             else if (_replayProceduralDefault)
             {
                 DisposeOwnedMatchLevel();
 
                 _boardBinder?.Dispose();
-                _boardBinder = new LayeredMatchBoardBinder();
-                _boardBinder.Bind(_gameUIView.Root, packageName, cardComponentName, cardCellGap, null, OnMatchBoardCompleted);
-
+                _boardBinder = null;
                 _effectiveTimeLimitSeconds = _replayTimeLimitSeconds;
+                ResetPlayPickUiState();
+                BeginPlayStyleChoiceOrBindBoard(null);
             }
-
-            StartLevelSessionAfterBind();
-            BindGameToolbarIfPresent();
         }
         catch (Exception ex)
         {
@@ -1090,6 +1333,9 @@ public sealed class GameUIManager : MonoBehaviour
         }
 
         UnbindGameToolbarIfPresent();
+
+        UnregisterPlayPickHandlers();
+        DisposeFloatingPlayPick();
 
         _gameUIView.ClearPopups();
         _gameUIView.Root.Dispose();

@@ -15,6 +15,13 @@ namespace VitaMj.MatchGame
         MatchedPair,
         /// <summary>两张数字不同，选中清空。</summary>
         MismatchedPair,
+
+        /// <summary>收纳栏模式：卡牌已移入栏，队尾暂未形成相邻相同对。</summary>
+        MatchBarEnqueued,
+        /// <summary>收纳栏模式：入栏后队尾相邻相同牌已从栏中抵消（棋盘格已在此前入栏时清空）。</summary>
+        MatchBarMerged,
+        /// <summary>收纳栏已满，再点此格导致失败（不入栏）。</summary>
+        MatchBarFullGameOver,
     }
 
     /// <summary>
@@ -26,11 +33,17 @@ namespace VitaMj.MatchGame
         readonly List<LayeredGridCell> _cells = new List<LayeredGridCell>();
         readonly Dictionary<(int layer, int row, int col), LayeredGridCell> _cellAt = new Dictionary<(int layer, int row, int col), LayeredGridCell>();
         readonly Random _rng;
+        readonly List<int> _matchBar = new List<int>();
 
         int? _selectedId;
 
         public IReadOnlyList<LayeredGridCell> Cells => _cells;
         public int? SelectedCellId => _selectedId;
+
+        /// <summary>收纳栏容量；设为 0 使用传统两次点击配对。</summary>
+        public int MatchBarCapacity { get; set; }
+
+        public IReadOnlyList<int> MatchBarCellIds => _matchBar;
         /// <summary>最底层行数。</summary>
         public int RowCount { get; private set; }
         /// <summary>最底层列数。</summary>
@@ -104,6 +117,7 @@ namespace VitaMj.MatchGame
             _cells.Clear();
             _cellAt.Clear();
             _selectedId = null;
+            _matchBar.Clear();
 
             int id = 0;
             for (int layer = 0; layer < layers; layer++)
@@ -184,6 +198,7 @@ namespace VitaMj.MatchGame
             }
 
             _selectedId = null;
+            _matchBar.Clear();
         }
 
         void Shuffle(IList<int> list)
@@ -205,8 +220,23 @@ namespace VitaMj.MatchGame
         public bool CanClick(int cellId) =>
             PairMatchRules.CanClick(_cells, cellId);
 
-        /// <summary>尝试点击一格：第一次选中，第二次比对数字。</summary>
-        public LayeredMatchClickResult TryClick(int cellId) =>
-            PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
+        /// <summary>收纳栏模式下一击入栏；否则第一次选中第二张比对。</summary>
+        public LayeredMatchClickResult TryClick(int cellId)
+        {
+            if (MatchBarCapacity > 0)
+            {
+                _selectedId = null;
+                return PairMatchRules.TryMatchBarClick(_cells, _matchBar, MatchBarCapacity, cellId);
+            }
+
+            return PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
+        }
+
+        public bool TryRevertLastMatchBarEntry()
+        {
+            if (MatchBarCapacity <= 0)
+                return false;
+            return PairMatchRules.TryMatchBarRevert(_cells, _matchBar);
+        }
     }
 }

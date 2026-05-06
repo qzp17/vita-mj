@@ -64,6 +64,9 @@ namespace VitaMj.MatchGame
         [Tooltip("本关倒计时秒数；0 表示不限时（与关卡 content JSON 中 timeLimitSeconds / time 一致）")]
         public int timeLimitSeconds;
 
+        [Tooltip("收纳栏上限；0 表示传统「点两次相同牌」配对。≥1 时点击入栏，栏尾相邻相同则抵消，栏满再点失败。")]
+        public int queueMaxSlots;
+
         public List<MatchLevelCardRow> cards = new List<MatchLevelCardRow>();
     }
 }

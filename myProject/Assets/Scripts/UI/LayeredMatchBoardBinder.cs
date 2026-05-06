@@ -5,7 +5,7 @@ using VitaMj.MatchGame;
 
 /// <summary>
 /// 将 <see cref="IPairMatchGame"/>（程序化 <see cref="LayeredPairMatchGame"/> 或表驱动 <see cref="ConfiguredPairMatchGame"/>）
-/// 与 FairyGUI <c>Package1/card</c> 绑定；下层被上层挡住时不可点（灰显）；先后点两枚数字相同则消除。
+/// 与 FairyGUI <c>Package1/card</c> 绑定；玩法由 <see cref="MatchPlayStyle"/> 决定：双点配对或收纳栏入队消除。
 /// </summary>
 public sealed class LayeredMatchBoardBinder
 {
@@ -33,6 +33,33 @@ public sealed class LayeredMatchBoardBinder
     int? _hintIdB;
 
     System.Action _onBoardComplete;
+    System.Action _onMatchBarOverflow;
+
+    GComponent _gameViewRoot;
+    GComponent _matchBarDock;
+
+    float _cardW;
+    float _cardH;
+    float _layoutOx;
+    float _layoutOy;
+    float _gridW0;
+    float _gridH0;
+    float _stepX;
+    float _stepY;
+    float _layerShiftX;
+    float _layerShiftY;
+    int _rowCount;
+    int _colCount;
+
+    float _barFlyDuration = 0.35f;
+    const int BoardCardSortingOrder = 0;
+    const int BarCardSortingOrderBase = 50;
+
+    readonly HashSet<int> _flightCellIds = new HashSet<int>();
+    int _activeBarFlights;
+
+    GButton _btnRevert;
+    EventCallback _revertClickHandler;
 
     public IPairMatchGame Model => _model;
 
@@ -48,25 +75,48 @@ public sealed class LayeredMatchBoardBinder
 
     /// <param name="level">非空则按 <see cref="ConfiguredPairMatchGame"/> 布局；为空则使用默认 4×5×2 程序化棋盘。</param>
     /// <param name="onBoardComplete">全部消除且结算动效结束后调用（仅触发一次）。</param>
-    public void Bind(GComponent gameViewRoot, string packageName, string cardComponentName, float cellGap, MatchLevelDefinition level = null, System.Action onBoardComplete = null)
+    /// <param name="onMatchBarOverflow">收纳栏已满时再点可行格时触发对局失败（仅关卡 queueMaxSlots &gt; 0 时需要）。</param>
+    /// <param name="matchBarDockPanelName">收纳栏锚点 panel（game_view 子节点），第一张牌左上角与之对齐；留空则栏位排在棋盘下方。</param>
+    /// <param name="matchBarFlySeconds">入栏飞行动画时长（秒）。</param>
+    public void Bind(
+        GComponent gameViewRoot,
+        string packageName,
+        string cardComponentName,
+        float cellGap,
+        MatchLevelDefinition level = null,
+        System.Action onBoardComplete = null,
+        System.Action onMatchBarOverflow = null,
+        MatchPlayStyle playStyle = MatchPlayStyle.ClassicPairClick,
+        int proceduralQueueMaxSlots = ConfiguredPairMatchGame.DefaultQueueSlotsWhenConfigZero,
+        string matchBarDockPanelName = null,
+        float matchBarFlySeconds = 0.35f)
     {
         Dispose();
+        _gameViewRoot = gameViewRoot;
         _packageName = packageName;
         _cardComponentName = cardComponentName;
         _gap = cellGap;
         _onBoardComplete = onBoardComplete;
+        _onMatchBarOverflow = onMatchBarOverflow;
+        _barFlyDuration = Mathf.Max(0.05f, matchBarFlySeconds);
+
+        if (!string.IsNullOrEmpty(matchBarDockPanelName))
+            _matchBarDock = gameViewRoot.GetChild(matchBarDockPanelName)?.asCom;
 
         GObject holderObj = gameViewRoot.GetChild(HolderChildName);
         _holder = holderObj != null ? holderObj.asCom : gameViewRoot;
 
         if (level != null)
-            _model = new ConfiguredPairMatchGame(level);
+            _model = new ConfiguredPairMatchGame(level, playStyle);
         else
         {
             var proc = new LayeredPairMatchGame(Random.Range(int.MinValue, int.MaxValue));
             proc.BuildGrid(DefaultRows, DefaultCols, DefaultLayers);
             int pairs = LayeredPairMatchGame.GetMaxPairCount(DefaultRows, DefaultCols, DefaultLayers);
             proc.DealPairs(pairs);
+
+            proc.MatchBarCapacity = playStyle == MatchPlayStyle.MatchBarQueue ? Mathf.Max(1, proceduralQueueMaxSlots) : 0;
+
             _model = proc;
         }
 
@@ -88,11 +138,11 @@ public sealed class LayeredMatchBoardBinder
         float layerShiftX = stepX * 0.5f;
         float layerShiftY = stepY * 0.5f;
 
-        ComputeGridFootprint(_model, out int rowCount, out int colCount);
-        float gridW0 = colCount * cellW + (colCount - 1) * _gap;
-        float gridH0 = rowCount * cellH + (rowCount - 1) * _gap;
-        float ox = Mathf.Max(0f, (_holder.width - gridW0) * 0.5f);
-        float oy = Mathf.Max(0f, (_holder.height - gridH0) * 0.5f);
+        ComputeGridFootprint(_model, out _rowCount, out _colCount);
+        _gridW0 = _colCount * cellW + (_colCount - 1) * _gap;
+        _gridH0 = _rowCount * cellH + (_rowCount - 1) * _gap;
+        _layoutOx = Mathf.Max(0f, (_holder.width - _gridW0) * 0.5f);
+        _layoutOy = Mathf.Max(0f, (_holder.height - _gridH0) * 0.5f);
 
         _clickHandler = OnCardClick;
 
@@ -118,20 +168,8 @@ public sealed class LayeredMatchBoardBinder
             }
 
             card.data = cell.Id;
-            if (cell.UseDesignerCoordinates)
-                card.SetXY(cell.DisplayX, cell.DisplayY);
-            else
-            {
-                float baseX = ox + cell.Col * stepX;
-                float baseY = oy + cell.Row * stepY;
-                if (cell.Layer > 0)
-                {
-                    baseX += layerShiftX * cell.Layer;
-                    baseY += layerShiftY * cell.Layer;
-                }
+            ApplyInitialBoardLayout(card, cell);
 
-                card.SetXY(baseX, baseY);
-            }
             _holder.AddChild(card);
             _cards[cell.Id] = card;
 
@@ -140,11 +178,19 @@ public sealed class LayeredMatchBoardBinder
             card.onClick.Add(_clickHandler);
         }
 
+        BindRevertButton(gameViewRoot);
+
         RefreshAllCards();
+        RefreshRevertButtonState();
 
         var tip = gameViewRoot.GetChild("txt_tip")?.asTextField;
         if (tip != null)
-            tip.text = "翻开两张相同数字即可消除（上层未消尽时下层锁住）";
+        {
+            if (_model.MatchBarCapacity > 0)
+                tip.text = $"收纳栏最多 {_model.MatchBarCapacity} 张：点击移入，栏尾相邻相同则抵消；栏满再点失败。";
+            else
+                tip.text = "翻开两张相同数字即可消除（上层未消尽时下层锁住）";
+        }
     }
 
     /// <summary>查找一对当面可消的相同牌并在二者上循环播放 <c>help</c> 动效。</summary>
@@ -273,6 +319,48 @@ public sealed class LayeredMatchBoardBinder
         }
     }
 
+    void ApplyInitialBoardLayout(GComponent card, LayeredGridCell cell)
+    {
+        Vector2 p = ComputeBoardSlotLocal(cell);
+        card.SetXY(p.x, p.y);
+    }
+
+    Vector2 ComputeBoardSlotLocal(LayeredGridCell cell)
+    {
+        if (cell.UseDesignerCoordinates)
+            return new Vector2(cell.DisplayX, cell.DisplayY);
+        float baseX = _layoutOx + cell.Col * _stepX;
+        float baseY = _layoutOy + cell.Row * _stepY;
+        if (cell.Layer > 0)
+        {
+            baseX += _layerShiftX * cell.Layer;
+            baseY += _layerShiftY * cell.Layer;
+        }
+        return new Vector2(baseX, baseY);
+    }
+
+    Vector2 DockOriginLocalInHolder()
+    {
+        if (_matchBarDock != null && !_matchBarDock.isDisposed && _holder != null && !_holder.isDisposed)
+            return _holder.GlobalToLocal(_matchBarDock.LocalToGlobal(Vector2.zero));
+        return new Vector2(_layoutOx, _layoutOy + _gridH0 + Mathf.Max(_gap, 8f));
+    }
+
+    Vector2 GetBarSlotLocal(int slotIndex)
+    {
+        Vector2 dockOrigin = DockOriginLocalInHolder();
+        float dockH = _matchBarDock != null && !_matchBarDock.isDisposed ? _matchBarDock.height : _cardH;
+        float y = dockOrigin.y + Mathf.Max(0f, (dockH - _cardH) * 0.5f);
+        float x = dockOrigin.x + slotIndex * (_cardW + _gap);
+        return new Vector2(x, y);
+    }
+
+    static void KillCardMovementTween(GComponent card)
+    {
+        if (card != null && !card.isDisposed)
+            GTween.Kill(card, TweenPropType.XY, false);
+    }
+
     /// <summary>点击可能落在 loader / 文本上，沿 parent 找到挂了 cell.Id 的 card。</summary>
     static bool TryResolveCellId(GObject sender, out int cellId)
     {
@@ -316,9 +404,13 @@ public sealed class LayeredMatchBoardBinder
         if (_model == null || context.sender == null || _boardLocked)
             return;
 
+        if (_model.MatchBarCapacity > 0 && _activeBarFlights > 0)
+            return;
+
         if (!TryResolveCellId(context.sender as GObject, out int cellId))
         {
             RefreshAllCards();
+            RefreshRevertButtonState();
             return;
         }
 
@@ -330,22 +422,28 @@ public sealed class LayeredMatchBoardBinder
 
         int? selBefore = _model.SelectedCellId;
 
+        GComponent moveCard = GetCard(cellId);
+        Vector2 preLocal = moveCard != null && !moveCard.isDisposed ? moveCard.xy : Vector2.zero;
+
         var result = _model.TryClick(cellId);
 
         switch (result)
         {
             case LayeredMatchClickResult.Invalid:
                 RefreshAllCards();
+                RefreshRevertButtonState();
                 break;
 
             case LayeredMatchClickResult.SelectedFirst:
                 SafePlayTransition(GetCard(cellId), TrSelect, null);
                 RefreshAllCards();
+                RefreshRevertButtonState();
                 break;
 
             case LayeredMatchClickResult.Deselected:
                 GetCard(cellId)?.GetTransition(TrSelect)?.PlayReverse();
                 RefreshAllCards();
+                RefreshRevertButtonState();
                 break;
 
             case LayeredMatchClickResult.MismatchedPair:
@@ -353,7 +451,10 @@ public sealed class LayeredMatchBoardBinder
                 if (selBefore.HasValue)
                     PlayPairTransitionThenRefresh(selBefore.Value, cellId, TrFail);
                 else
+                {
                     RefreshAllCards();
+                    RefreshRevertButtonState();
+                }
                 break;
 
             case LayeredMatchClickResult.MatchedPair:
@@ -361,9 +462,139 @@ public sealed class LayeredMatchBoardBinder
                 if (selBefore.HasValue)
                     PlayPairTransitionThenRefresh(selBefore.Value, cellId, TrSucc, AfterMatchedRefresh);
                 else
+                {
                     RefreshAllCards();
+                    RefreshRevertButtonState();
+                }
+                break;
+
+            case LayeredMatchClickResult.MatchBarEnqueued:
+                StopHintPulseInternal();
+                if (ShouldTweenMatchBarEnqueue())
+                    StartMatchBarEnqueueFly(cellId, preLocal);
+                else
+                {
+                    RefreshAllCards();
+                    RefreshRevertButtonState();
+                    if (_model != null && _model.IsComplete)
+                        OnBoardComplete();
+                }
+                break;
+
+            case LayeredMatchClickResult.MatchBarMerged:
+                StopHintPulseInternal();
+                RefreshAllCards();
+                RefreshRevertButtonState();
+                if (_model != null && _model.IsComplete)
+                    OnBoardComplete();
+                break;
+
+            case LayeredMatchClickResult.MatchBarFullGameOver:
+                StopHintPulseInternal();
+                RefreshAllCards();
+                RefreshRevertButtonState();
+                _onMatchBarOverflow?.Invoke();
                 break;
         }
+    }
+
+    bool ShouldTweenMatchBarEnqueue() =>
+        _model != null &&
+        _model.MatchBarCapacity > 0 &&
+        _matchBarDock != null &&
+        !_matchBarDock.isDisposed &&
+        _barFlyDuration > 0f;
+
+    void StartMatchBarEnqueueFly(int cellId, Vector2 fromLocal)
+    {
+        var card = GetCard(cellId);
+        if (card == null || card.isDisposed)
+        {
+            RefreshAllCards();
+            RefreshRevertButtonState();
+            if (_model != null && _model.IsComplete)
+                OnBoardComplete();
+            return;
+        }
+
+        _activeBarFlights++;
+        _flightCellIds.Add(cellId);
+        KillCardMovementTween(card);
+
+        card.visible = true;
+        card.SetXY(fromLocal.x, fromLocal.y);
+        card.sortingOrder = BarCardSortingOrderBase + 200;
+        card.touchable = false;
+        card.grayed = false;
+
+        int slot = _model.MatchBarCellIds.Count - 1;
+        Vector2 to = GetBarSlotLocal(slot);
+
+        RefreshAllCards();
+        RefreshRevertButtonState();
+
+        card.TweenMove(to, _barFlyDuration)
+            .SetEase(EaseType.QuadOut)
+            .OnComplete(() =>
+            {
+                _flightCellIds.Remove(cellId);
+                _activeBarFlights = Mathf.Max(0, _activeBarFlights - 1);
+                if (card.isDisposed)
+                    return;
+                RefreshAllCards();
+                RefreshRevertButtonState();
+                if (_model != null && _model.IsComplete)
+                    OnBoardComplete();
+            });
+    }
+
+    void BindRevertButton(GComponent root)
+    {
+        _btnRevert = root.GetChild("btn_revert")?.asButton;
+        if (_btnRevert == null)
+            return;
+        _revertClickHandler ??= OnRevertClicked;
+        _btnRevert.onClick.Add(_revertClickHandler);
+    }
+
+    void OnRevertClicked(EventContext _)
+    {
+        if (_model == null || _boardLocked)
+            return;
+        if (_model.MatchBarCapacity <= 0)
+            return;
+        IReadOnlyList<int> bar = _model.MatchBarCellIds;
+        if (bar.Count == 0)
+            return;
+
+        int lastId = bar[bar.Count - 1];
+        if (_flightCellIds.Contains(lastId))
+        {
+            KillCardMovementTween(GetCard(lastId));
+            _flightCellIds.Remove(lastId);
+            _activeBarFlights = Mathf.Max(0, _activeBarFlights - 1);
+        }
+
+        if (!_model.TryRevertLastMatchBarEntry())
+            return;
+
+        RefreshAllCards();
+        RefreshRevertButtonState();
+    }
+
+    void RefreshRevertButtonState()
+    {
+        if (_btnRevert == null || _btnRevert.isDisposed || _model == null)
+            return;
+        bool barMode = _model.MatchBarCapacity > 0;
+        _btnRevert.visible = barMode;
+        if (!barMode)
+            return;
+
+        int n = _model.MatchBarCellIds.Count;
+        bool can = n > 0 && !_boardLocked;
+        _btnRevert.grayed = n == 0;
+        _btnRevert.touchable = can;
     }
 
     void AfterMatchedRefresh()
@@ -384,6 +615,15 @@ public sealed class LayeredMatchBoardBinder
         if (_model == null)
             return;
 
+        bool barMode = _model.MatchBarCapacity > 0;
+        IReadOnlyList<int> barIds = barMode ? _model.MatchBarCellIds : null;
+        var barSlotOf = barMode ? new Dictionary<int, int>() : null;
+        if (barMode && barIds != null)
+        {
+            for (int i = 0; i < barIds.Count; i++)
+                barSlotOf[barIds[i]] = i;
+        }
+
         foreach (var kv in _cards)
         {
             int id = kv.Key;
@@ -392,6 +632,54 @@ public sealed class LayeredMatchBoardBinder
                 continue;
 
             var cell = _model.GetCell(id);
+
+            if (barMode)
+            {
+                if (!cell.Eliminated)
+                {
+                    Vector2 bp = ComputeBoardSlotLocal(cell);
+                    card.visible = true;
+                    if (!_flightCellIds.Contains(id))
+                        card.SetXY(bp.x, bp.y);
+                    card.sortingOrder = BoardCardSortingOrder;
+
+                    ApplyCardFace(card, cell.Value);
+
+                    bool can = _model.CanClick(id) && !_boardLocked && _activeBarFlights <= 0;
+                    card.grayed = !can;
+                    card.touchable = can;
+
+                    continue;
+                }
+
+                if (barSlotOf != null && barSlotOf.TryGetValue(id, out int slotIdx))
+                {
+                    card.visible = true;
+
+                    ApplyCardFace(card, cell.Value);
+
+                    if (!_flightCellIds.Contains(id))
+                    {
+                        Vector2 p = GetBarSlotLocal(slotIdx);
+                        card.SetXY(p.x, p.y);
+                        card.sortingOrder = BarCardSortingOrderBase + slotIdx;
+                    }
+                    else
+                        card.sortingOrder = BarCardSortingOrderBase + 200 + slotIdx;
+
+                    card.grayed = false;
+                    card.touchable = false;
+                    continue;
+                }
+
+                KillCardMovementTween(card);
+                card.visible = false;
+                continue;
+            }
+
+            // 经典模式
+            card.sortingOrder = BoardCardSortingOrder;
+
             if (cell.Eliminated)
             {
                 card.visible = false;
@@ -402,12 +690,12 @@ public sealed class LayeredMatchBoardBinder
 
             ApplyCardFace(card, cell.Value);
 
-            bool can = _model.CanClick(id);
-            card.grayed = !can;
-            card.touchable = can && !_boardLocked;
-
-            // 选中态由 FairyGUI transition「select」表现，不再代码写缩放。
+            bool canClassic = _model.CanClick(id);
+            card.grayed = !canClassic;
+            card.touchable = canClassic && !_boardLocked;
         }
+
+        RefreshRevertButtonState();
     }
 
     GComponent GetCard(int cellId)
@@ -477,6 +765,11 @@ public sealed class LayeredMatchBoardBinder
 
         StopHintPulseInternal();
 
+        if (_btnRevert != null && _revertClickHandler != null)
+            _btnRevert.onClick.Remove(_revertClickHandler);
+        _btnRevert = null;
+        _revertClickHandler = null;
+
         if (_cards.Count > 0 && _clickHandler != null)
         {
             foreach (var kv in _cards)
@@ -484,6 +777,7 @@ public sealed class LayeredMatchBoardBinder
                 var card = kv.Value;
                 if (card != null && !card.isDisposed)
                 {
+                    KillCardMovementTween(card);
                     card.onClick.Remove(_clickHandler);
                     StopTransitionIfPlaying(card, TrSelect);
                     StopTransitionIfPlaying(card, TrSucc);
@@ -493,11 +787,17 @@ public sealed class LayeredMatchBoardBinder
             }
         }
 
+        _flightCellIds.Clear();
+        _activeBarFlights = 0;
+
         _cards.Clear();
         _clickHandler = null;
         _holder = null;
+        _gameViewRoot = null;
+        _matchBarDock = null;
         _model = null;
         _onBoardComplete = null;
+        _onMatchBarOverflow = null;
     }
 
     /// <summary>仅统计未使用策划绝对坐标的牌，用于居中推算网格；若全部为绝对坐标则退化为 1×1。</summary>

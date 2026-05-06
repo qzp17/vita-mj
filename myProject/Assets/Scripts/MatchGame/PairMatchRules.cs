@@ -23,6 +23,91 @@ namespace VitaMj.MatchGame
             return true;
         }
 
+        /// <summary>
+        /// 收纳栏：可点时入栏并离开棋盘；若栏尾与前一张牌面相同则两者从栏中移除（可连环）；栏已满时再点判定失败。
+        /// </summary>
+        public static LayeredMatchClickResult TryMatchBarClick(
+            IReadOnlyList<LayeredGridCell> cells,
+            List<int> barCellIds,
+            int barCapacity,
+            int cellId)
+        {
+            if ((uint)cellId >= (uint)cells.Count)
+                return LayeredMatchClickResult.Invalid;
+
+            if (!CanClick(cells, cellId))
+                return LayeredMatchClickResult.Invalid;
+
+            if (barCellIds.Count >= barCapacity)
+                return LayeredMatchClickResult.MatchBarFullGameOver;
+
+            barCellIds.Add(cellId);
+            cells[cellId].Eliminated = true;
+
+            bool merged = false;
+            while (barCellIds.Count >= 2)
+            {
+                int a = barCellIds[barCellIds.Count - 2];
+                int b = barCellIds[barCellIds.Count - 1];
+                if (cells[a].Value != cells[b].Value)
+                    break;
+
+                barCellIds.RemoveAt(barCellIds.Count - 1);
+                barCellIds.RemoveAt(barCellIds.Count - 1);
+                merged = true;
+            }
+
+        public static LayeredMatchClickResult TryMatchBarClick(
+            IReadOnlyList<LayeredGridCell> cells,
+            List<int> barCellIds,
+            int barCapacity,
+            int cellId)
+        {
+            if ((uint)cellId >= (uint)cells.Count)
+                return LayeredMatchClickResult.Invalid;
+
+            if (!CanClick(cells, cellId))
+                return LayeredMatchClickResult.Invalid;
+
+            if (barCellIds.Count >= barCapacity)
+                return LayeredMatchClickResult.MatchBarFullGameOver;
+
+            barCellIds.Add(cellId);
+            cells[cellId].Eliminated = true;
+
+            bool merged = false;
+            while (barCellIds.Count >= 2)
+            {
+                int a = barCellIds[barCellIds.Count - 2];
+                int b = barCellIds[barCellIds.Count - 1];
+                if (cells[a].Value != cells[b].Value)
+                    break;
+
+                barCellIds.RemoveAt(barCellIds.Count - 1);
+                barCellIds.RemoveAt(barCellIds.Count - 1);
+                merged = true;
+            }
+
+            return merged
+                ? LayeredMatchClickResult.MatchBarMerged
+                : LayeredMatchClickResult.MatchBarEnqueued;
+        }
+
+        /// <summary>
+        /// 收纳栏反悔：取下队尾的一张牌放回棋盘。
+        /// </summary>
+        public static bool TryMatchBarRevert(IReadOnlyList<LayeredGridCell> cells, List<int> barCellIds)
+        {
+            if (barCellIds == null || barCellIds.Count == 0 || cells == null)
+                return false;
+            int id = barCellIds[barCellIds.Count - 1];
+            barCellIds.RemoveAt(barCellIds.Count - 1);
+            if ((uint)id >= (uint)cells.Count)
+                return false;
+            cells[id].Eliminated = false;
+            return true;
+        }
+
         public static LayeredMatchClickResult TryClick(IReadOnlyList<LayeredGridCell> cells, ref int? selectedId, int cellId)
         {
             if ((uint)cellId >= (uint)cells.Count)
@@ -64,6 +149,9 @@ namespace VitaMj.MatchGame
         {
             cellIdA = cellIdB = -1;
             if (game == null)
+                return false;
+
+            if (game.MatchBarCapacity > 0)
                 return false;
 
             IReadOnlyList<LayeredGridCell> cells = game.Cells;
