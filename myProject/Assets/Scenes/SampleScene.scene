@@ -463,10 +463,32 @@ MonoBehaviour:
   packageName: Package1
   levelViewComponentName: level_view
   gameViewComponentName: game_view
+  finishPopupComponentName: finish_popup
+  settingPopupComponentName: setting_popup
+  finishPopupBackButtonName: 
+  finishPopupRetryButtonName: 
+  finishPopupNextButtonName: 
+  finishPopupStatusControllerName: status
   cardComponentName: card
   cardCellGap: 8
-  levelConfig: {fileID: 11400000, guid: 54c1219a2d8211442a83ae01d40a6774, type: 2}
+  offerMatchPlayStyleChoice: 1
+  fallbackMatchPlayStyle: 0
+  gameViewPlayPickPanelName: play_mode_pick
+  playStylePickFallbackPopupName: 
+  pickClassicPlayButtonPreferredName: 
+  pickQueuePlayButtonPreferredName: 
+  proceduralQueueMaxSlotsFallback: 7
+  matchBarDockPanelName: match_bar_panel
+  matchBarFlyDurationSeconds: 0.35
+  enableCardBoardEntrance: 1
+  cardEntranceMoveSeconds: 0.2
+  cardEntranceStaggerSeconds: 0.055
+  levelConfigTableKey: Level
   matchLevel: {fileID: 0}
+  mainUIPanel: {fileID: 0}
+  playStartupBackgroundMusic: 1
+  startupBackgroundMusicTag: main_bgm
+  levelCellStateControllerName: state
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

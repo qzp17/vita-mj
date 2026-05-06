@@ -145,7 +145,7 @@ public sealed class GameUIManager : MonoBehaviour
     GameUIView _gameUIView;
     LayeredMatchBoardBinder _boardBinder;
 
-    readonly List<(GButton Button, EventCallback Handler)> _playPickHandlerRegs = new List<(GButton Button, EventCallback Handler)>();
+    readonly List<(GButton Button, EventCallback1 Handler)> _playPickHandlerRegs = new List<(GButton Button, EventCallback1 Handler)>();
 
     GObject _floatingPlayPickRoot;
 
@@ -918,7 +918,7 @@ public sealed class GameUIManager : MonoBehaviour
         return null;
     }
 
-    void RegisterPlayPickClick(GButton btn, EventCallback handler)
+    void RegisterPlayPickClick(GButton btn, EventCallback1 handler)
     {
         btn.onClick.Add(handler);
         _playPickHandlerRegs.Add((btn, handler));
@@ -928,7 +928,7 @@ public sealed class GameUIManager : MonoBehaviour
     {
         for (int i = 0; i < _playPickHandlerRegs.Count; i++)
         {
-            (GButton button, EventCallback handler) = _playPickHandlerRegs[i];
+            (GButton button, EventCallback1 handler) = _playPickHandlerRegs[i];
             button?.onClick.Remove(handler);
         }
 

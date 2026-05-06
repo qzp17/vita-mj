@@ -59,7 +59,7 @@ public sealed class LayeredMatchBoardBinder
     int _activeBarFlights;
 
     GButton _btnRevert;
-    EventCallback _revertClickHandler;
+    EventCallback1 _revertClickHandler;
 
     bool _cardEntranceActive;
     int _cardEntranceTweensRemain;
