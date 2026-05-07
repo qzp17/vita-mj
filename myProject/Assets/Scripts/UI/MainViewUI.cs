@@ -21,7 +21,10 @@ public class MainViewUI : MonoBehaviour
 
     public GButton BtnSetting { get; private set; }
 
+    public GButton BtnArrow { get; private set; }
+
     EventCallback1 _onSettingClicked;
+    EventCallback1 _onArrowClicked;
 
     void Awake()
     {
@@ -58,6 +61,13 @@ public class MainViewUI : MonoBehaviour
             _onSettingClicked = OnSettingClicked;
             BtnSetting.onClick.Add(_onSettingClicked);
         }
+
+        BtnArrow = MainView.BtnArrow;
+        if (BtnArrow != null)
+        {
+            _onArrowClicked = OnArrowClicked;
+            BtnArrow.onClick.Add(_onArrowClicked);
+        }
     }
 
     void OnDestroy()
@@ -66,6 +76,8 @@ public class MainViewUI : MonoBehaviour
             N0Button.onClick.Remove(OnN0Clicked);
         if (BtnSetting != null && _onSettingClicked != null)
             BtnSetting.onClick.Remove(_onSettingClicked);
+        if (BtnArrow != null && _onArrowClicked != null)
+            BtnArrow.onClick.Remove(_onArrowClicked);
     }
 
     void OnSettingClicked(EventContext _)
@@ -76,6 +88,11 @@ public class MainViewUI : MonoBehaviour
     void OnN0Clicked(EventContext _)
     {
         _uiNav.OpenLevelView();
+    }
+
+    void OnArrowClicked(EventContext _)
+    {
+        _uiNav.OpenArrowGameView();
     }
 }
 

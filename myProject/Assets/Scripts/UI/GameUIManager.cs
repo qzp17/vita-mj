@@ -41,6 +41,9 @@ public sealed class GameUIManager : MonoBehaviour
     string gameViewComponentName = "game_view";
 
     [SerializeField]
+    string arrowGameViewComponentName = "game_arrow_view";
+
+    [SerializeField]
     string finishPopupComponentName = "finish_popup";
 
     [SerializeField]
@@ -65,6 +68,9 @@ public sealed class GameUIManager : MonoBehaviour
     [Tooltip("棋盘每张卡片对应的 FairyGUI 组件名（Package1 内）")]
     [SerializeField]
     string cardComponentName = "card";
+
+    [SerializeField]
+    string arrowComponentName = "arrow";
 
     [SerializeField]
     float cardCellGap = 8f;
@@ -147,7 +153,9 @@ public sealed class GameUIManager : MonoBehaviour
     MainUIView _mainUIView;
     LevelUIView _levelUIView;
     GameUIView _gameUIView;
+    ArrowGameUIView _arrowGameUIView;
     LayeredMatchBoardBinder _boardBinder;
+    ArrowEliminationBoardBinder _arrowBoardBinder;
 
     readonly List<(GButton Button, EventCallback1 Handler)> _playPickHandlerRegs = new List<(GButton Button, EventCallback1 Handler)>();
 
@@ -169,6 +177,9 @@ public sealed class GameUIManager : MonoBehaviour
     EventCallback1 _finishRetryClickHandler;
     EventCallback1 _finishNextClickHandler;
     EventCallback1 _settingPopupCloseClickHandler;
+    EventCallback1 _arrowBackClickHandler;
+    EventCallback1 _arrowRetryClickHandler;
+    EventCallback1 _arrowNextClickHandler;
 
     bool _gameEnded;
 
@@ -207,6 +218,9 @@ public sealed class GameUIManager : MonoBehaviour
         _finishRetryClickHandler = OnFinishRetryClicked;
         _finishNextClickHandler = OnFinishNextClicked;
         _settingPopupCloseClickHandler = OnSettingPopupCloseClicked;
+        _arrowBackClickHandler = OnArrowBackClicked;
+        _arrowRetryClickHandler = OnArrowRetryClicked;
+        _arrowNextClickHandler = OnArrowNextClicked;
         if (mainUIPanel == null)
             mainUIPanel = GetComponent<UIPanel>();
         EnsureMainUIView();
@@ -331,6 +345,7 @@ public sealed class GameUIManager : MonoBehaviour
 
         CloseLevelView();
         CloseGameView();
+        CloseArrowGameView();
     }
 
     void EnsurePackageLoaded()
@@ -707,6 +722,8 @@ public sealed class GameUIManager : MonoBehaviour
     bool HasFullscreenOverlay()
     {
         if (_gameUIView != null && !_gameUIView.Root.isDisposed)
+            return true;
+        if (_arrowGameUIView != null && !_arrowGameUIView.Root.isDisposed)
             return true;
         if (_levelUIView != null && !_levelUIView.Root.isDisposed && _levelUIView.Root.visible)
             return true;
@@ -1420,6 +1437,12 @@ public sealed class GameUIManager : MonoBehaviour
         _boardBinder = null;
     }
 
+    void TearDownArrowBoard()
+    {
+        _arrowBoardBinder?.Dispose();
+        _arrowBoardBinder = null;
+    }
+
     /// <summary>
     /// 关闭游戏界面。
     /// </summary>
@@ -1462,6 +1485,102 @@ public sealed class GameUIManager : MonoBehaviour
             lvList.numItems = _levelRowTagsOrdered.Count;
             RefreshLevelCellsVisuals(lvList);
         }
+
+        RefreshUnderlayVisibility();
+    }
+
+    public void OpenArrowGameView()
+    {
+        EnsurePackageLoaded();
+
+        if (_arrowGameUIView != null && !_arrowGameUIView.Root.isDisposed)
+        {
+            GRoot.inst.SetChildIndex(_arrowGameUIView.Root, GRoot.inst.numChildren - 1);
+            RefreshUnderlayVisibility();
+            return;
+        }
+
+        TearDownArrowBoard();
+
+        GObject obj = UIPackage.CreateObject(packageName, arrowGameViewComponentName);
+        var com = obj as GComponent;
+        if (com == null)
+        {
+            Debug.LogError($"[GameUIManager] 创建失败：{packageName}/{arrowGameViewComponentName} 不存在或不是组件。");
+            obj?.Dispose();
+            return;
+        }
+
+        _arrowGameUIView = new ArrowGameUIView(com);
+        GRoot.inst.AddChild(_arrowGameUIView.Root);
+        _arrowGameUIView.Root.SetXY(0, 0);
+        _arrowGameUIView.Root.MakeFullScreen();
+        _arrowGameUIView.Root.AddRelation(GRoot.inst, RelationType.Size);
+
+        GButton back = _arrowGameUIView.BtnBack;
+        if (back != null)
+            back.onClick.Add(_arrowBackClickHandler);
+        GButton retry = _arrowGameUIView.BtnRetry;
+        if (retry != null)
+            retry.onClick.Add(_arrowRetryClickHandler);
+        GButton next = _arrowGameUIView.BtnNext;
+        if (next != null)
+            next.onClick.Add(_arrowNextClickHandler);
+
+        _arrowBoardBinder = new ArrowEliminationBoardBinder();
+        _arrowBoardBinder.Bind(
+            _arrowGameUIView,
+            packageName,
+            arrowComponentName,
+            OnArrowGameCleared);
+
+        RefreshUnderlayVisibility();
+    }
+
+    void OnArrowGameCleared()
+    {
+        Debug.Log("[GameUIManager] Arrow game cleared.");
+    }
+
+    void OnArrowBackClicked(EventContext _)
+    {
+        CloseArrowGameView();
+    }
+
+    void OnArrowRetryClicked(EventContext _)
+    {
+        _arrowBoardBinder?.ResetToInitial();
+    }
+
+    void OnArrowNextClicked(EventContext _)
+    {
+        _arrowBoardBinder?.RandomizeNextLevel();
+    }
+
+    public void CloseArrowGameView()
+    {
+        TearDownArrowBoard();
+
+        if (_arrowGameUIView == null || _arrowGameUIView.Root.isDisposed)
+        {
+            _arrowGameUIView = null;
+            RefreshUnderlayVisibility();
+            return;
+        }
+
+        GButton back = _arrowGameUIView.BtnBack;
+        if (back != null)
+            back.onClick.Remove(_arrowBackClickHandler);
+        GButton retry = _arrowGameUIView.BtnRetry;
+        if (retry != null)
+            retry.onClick.Remove(_arrowRetryClickHandler);
+        GButton next = _arrowGameUIView.BtnNext;
+        if (next != null)
+            next.onClick.Remove(_arrowNextClickHandler);
+
+        _arrowGameUIView.ClearPopups();
+        _arrowGameUIView.Root.Dispose();
+        _arrowGameUIView = null;
 
         RefreshUnderlayVisibility();
     }
