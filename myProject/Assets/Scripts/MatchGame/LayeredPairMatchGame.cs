@@ -37,6 +37,7 @@ namespace VitaMj.MatchGame
         readonly List<int> _lastMatchBarMergedAway = new List<int>();
 
         int? _selectedId;
+        bool _pendingMatchBarMergeAfterFly;
 
         static readonly int[] EmptyCellIdList = Array.Empty<int>();
 
@@ -50,6 +51,9 @@ namespace VitaMj.MatchGame
 
         public IReadOnlyList<int> LastMatchBarMergedAwayCellIds =>
             MatchBarCapacity > 0 ? _lastMatchBarMergedAway : EmptyCellIdList;
+
+        public bool PendingMatchBarMergeAfterFly =>
+            MatchBarCapacity > 0 && _pendingMatchBarMergeAfterFly;
 
         /// <summary>最底层行数。</summary>
         public int RowCount { get; private set; }
@@ -125,6 +129,7 @@ namespace VitaMj.MatchGame
             _cellAt.Clear();
             _selectedId = null;
             _matchBar.Clear();
+            _pendingMatchBarMergeAfterFly = false;
 
             int id = 0;
             for (int layer = 0; layer < layers; layer++)
@@ -206,6 +211,7 @@ namespace VitaMj.MatchGame
 
             _selectedId = null;
             _matchBar.Clear();
+            _pendingMatchBarMergeAfterFly = false;
         }
 
         void Shuffle(IList<int> list)
@@ -234,22 +240,53 @@ namespace VitaMj.MatchGame
             {
                 _selectedId = null;
                 _lastMatchBarMergedAway.Clear();
-                LayeredMatchClickResult r = PairMatchRules.TryMatchBarClick(
-                    _cells, _matchBar, MatchBarCapacity, cellId, _lastMatchBarMergedAway);
-                if (r != LayeredMatchClickResult.MatchBarMerged)
-                    _lastMatchBarMergedAway.Clear();
-                return r;
+                _pendingMatchBarMergeAfterFly = false;
+
+                LayeredMatchClickResult enqueue = PairMatchRules.TryMatchBarEnqueueOnly(
+                    _cells,
+                    _matchBar,
+                    MatchBarCapacity,
+                    cellId);
+                if (enqueue != LayeredMatchClickResult.MatchBarEnqueued)
+                    return enqueue;
+
+                _pendingMatchBarMergeAfterFly =
+                    PairMatchRules.MatchBarTailIsAdjacentSameFace(_cells, _matchBar);
+                return LayeredMatchClickResult.MatchBarEnqueued;
             }
 
             _lastMatchBarMergedAway.Clear();
             return PairMatchRules.TryClick(_cells, ref _selectedId, cellId);
         }
 
+        public LayeredMatchClickResult CompleteDeferredMatchBarMerges()
+        {
+            if (MatchBarCapacity <= 0)
+                return LayeredMatchClickResult.Invalid;
+
+            if (!_pendingMatchBarMergeAfterFly)
+                return LayeredMatchClickResult.MatchBarEnqueued;
+
+            _lastMatchBarMergedAway.Clear();
+            PairMatchRules.TryCollapseMatchBarMerges(_cells, _matchBar, _lastMatchBarMergedAway);
+            _pendingMatchBarMergeAfterFly = false;
+
+            return _lastMatchBarMergedAway.Count > 0
+                ? LayeredMatchClickResult.MatchBarMerged
+                : LayeredMatchClickResult.MatchBarEnqueued;
+        }
+
         public bool TryRevertLastMatchBarEntry()
         {
             if (MatchBarCapacity <= 0)
                 return false;
-            return PairMatchRules.TryMatchBarRevert(_cells, _matchBar);
+
+            bool ok = PairMatchRules.TryMatchBarRevert(_cells, _matchBar);
+            if (ok)
+                _pendingMatchBarMergeAfterFly =
+                    PairMatchRules.MatchBarTailIsAdjacentSameFace(_cells, _matchBar);
+
+            return ok;
         }
     }
 }

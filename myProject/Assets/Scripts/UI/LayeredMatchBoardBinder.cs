@@ -633,9 +633,12 @@ public sealed class LayeredMatchBoardBinder
             case LayeredMatchClickResult.MatchBarEnqueued:
                 StopHintPulseInternal();
                 if (ShouldTweenMatchBarEnqueue())
+                {
                     StartMatchBarEnqueueFly(cellId, preLocal);
+                }
                 else
                 {
+                    FlushDeferredMatchBarMergeIfNeeded();
                     RefreshAllCards();
                     RefreshRevertButtonState();
                     if (_model != null && _model.IsComplete)
@@ -645,6 +648,7 @@ public sealed class LayeredMatchBoardBinder
 
             case LayeredMatchClickResult.MatchBarMerged:
                 StopHintPulseInternal();
+                // 收纳栏合并通常延后到飞行落定后触发；若非 UI 触发仍收到此结果则照旧表现。
                 foreach (int mid in _model.LastMatchBarMergedAwayCellIds)
                     CardShatterParticles.PlayAtCard(GetCard(mid));
                 RefreshAllCards();
@@ -705,11 +709,27 @@ public sealed class LayeredMatchBoardBinder
                 _activeBarFlights = Mathf.Max(0, _activeBarFlights - 1);
                 if (card.isDisposed)
                     return;
+
+                FlushDeferredMatchBarMergeIfNeeded();
+
                 RefreshAllCards();
                 RefreshRevertButtonState();
                 if (_model != null && _model.IsComplete)
                     OnBoardComplete();
             });
+    }
+
+    void FlushDeferredMatchBarMergeIfNeeded()
+    {
+        if (_model == null || !_model.PendingMatchBarMergeAfterFly)
+            return;
+
+        LayeredMatchClickResult collapse = _model.CompleteDeferredMatchBarMerges();
+        if (collapse != LayeredMatchClickResult.MatchBarMerged)
+            return;
+
+        foreach (int mid in _model.LastMatchBarMergedAwayCellIds)
+            CardShatterParticles.PlayAtCard(GetCard(mid));
     }
 
     void BindRevertButton(GComponent root)
@@ -756,9 +776,9 @@ public sealed class LayeredMatchBoardBinder
             return;
 
         int n = _model.MatchBarCellIds.Count;
-        bool can = n > 0 && !_boardLocked && !_cardEntranceActive;
+        bool logicallyEnabled = n > 0 && !_boardLocked && !_cardEntranceActive;
         _btnRevert.grayed = n == 0;
-        _btnRevert.touchable = can;
+        _btnRevert.touchable = logicallyEnabled && _activeBarFlights <= 0;
     }
 
     void AfterMatchedRefresh()
@@ -812,9 +832,9 @@ public sealed class LayeredMatchBoardBinder
 
                     ApplyCardFace(card, cell.Value);
 
-                    bool can = _model.CanClick(id) && !_boardLocked && _activeBarFlights <= 0;
-                    card.grayed = !can;
-                    card.touchable = can;
+                    bool clickableIfNotFlying = _model.CanClick(id) && !_boardLocked;
+                    card.grayed = !clickableIfNotFlying;
+                    card.touchable = clickableIfNotFlying && _activeBarFlights <= 0;
 
                     continue;
                 }

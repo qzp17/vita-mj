@@ -24,18 +24,14 @@ namespace VitaMj.MatchGame
         }
 
         /// <summary>
-        /// 收纳栏：可点时入栏并离开棋盘；若栏尾与前一张牌面相同则两者从栏中移除（可连环）；栏已满时再点判定失败。
+        /// 收纳栏：仅入栏并离开棋盘（不在此处抵消）；栏已满时再点判定失败。
         /// </summary>
-        /// <param name="mergedAwayCollector">若非 null，会先 Clear，再在每次抵消时追加被移出收纳栏的一对 id（连环合并则可能多于 2 个）。</param>
-        public static LayeredMatchClickResult TryMatchBarClick(
+        public static LayeredMatchClickResult TryMatchBarEnqueueOnly(
             IReadOnlyList<LayeredGridCell> cells,
             List<int> barCellIds,
             int barCapacity,
-            int cellId,
-            List<int> mergedAwayCollector = null)
+            int cellId)
         {
-            mergedAwayCollector?.Clear();
-
             if ((uint)cellId >= (uint)cells.Count)
                 return LayeredMatchClickResult.Invalid;
 
@@ -48,7 +44,34 @@ namespace VitaMj.MatchGame
             barCellIds.Add(cellId);
             cells[cellId].Eliminated = true;
 
+            return LayeredMatchClickResult.MatchBarEnqueued;
+        }
+
+        /// <summary>收纳栏末尾两张面值是否相同（飞入落定后才会调用抵消）。</summary>
+        public static bool MatchBarTailIsAdjacentSameFace(
+            IReadOnlyList<LayeredGridCell> cells,
+            IReadOnlyList<int> barCellIds)
+        {
+            if (barCellIds == null || barCellIds.Count < 2 || cells == null)
+                return false;
+
+            int a = barCellIds[barCellIds.Count - 2];
+            int b = barCellIds[barCellIds.Count - 1];
+            return cells[a].Value == cells[b].Value;
+        }
+
+        /// <summary>
+        /// 从收纳栏末尾反复抵消相邻相同对，直至无法继续。
+        /// </summary>
+        /// <returns>是否发生过至少一次抵消。</returns>
+        public static bool TryCollapseMatchBarMerges(
+            IReadOnlyList<LayeredGridCell> cells,
+            List<int> barCellIds,
+            List<int> mergedAwayCollector)
+        {
+            mergedAwayCollector?.Clear();
             bool merged = false;
+
             while (barCellIds.Count >= 2)
             {
                 int a = barCellIds[barCellIds.Count - 2];
@@ -63,11 +86,29 @@ namespace VitaMj.MatchGame
                 merged = true;
             }
 
+            return merged;
+        }
+
+        /// <summary>
+        /// 收纳栏：入栏后对栏尾立即做抵消判定（UI 可先 <see cref="TryMatchBarEnqueueOnly"/> + 动画，再在落定后调用 <see cref="TryCollapseMatchBarMerges"/>）。
+        /// </summary>
+        /// <param name="mergedAwayCollector">若非 null，会先 Clear，再在每次抵消时追加被移出收纳栏的一对 id（连环合并则可能多于 2 个）。</param>
+        public static LayeredMatchClickResult TryMatchBarClick(
+            IReadOnlyList<LayeredGridCell> cells,
+            List<int> barCellIds,
+            int barCapacity,
+            int cellId,
+            List<int> mergedAwayCollector = null)
+        {
+            LayeredMatchClickResult enqueue = TryMatchBarEnqueueOnly(cells, barCellIds, barCapacity, cellId);
+            if (enqueue != LayeredMatchClickResult.MatchBarEnqueued)
+                return enqueue;
+
+            bool merged = TryCollapseMatchBarMerges(cells, barCellIds, mergedAwayCollector);
             return merged
                 ? LayeredMatchClickResult.MatchBarMerged
                 : LayeredMatchClickResult.MatchBarEnqueued;
         }
-
         /// <summary>
         /// 收纳栏反悔：取下队尾的一张牌放回棋盘。
         /// </summary>

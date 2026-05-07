@@ -16,13 +16,23 @@ namespace VitaMj.MatchGame
         IReadOnlyList<int> MatchBarCellIds { get; }
 
         /// <summary>
-        /// 仅当最近一次 <see cref="TryClick"/> 返回 <see cref="LayeredMatchClickResult.MatchBarMerged"/> 时含本击中从收纳栏抵消的 id（连环合并时多于 2 个）；否则为空。
+        /// 收纳栏最近一次抵消所移除的格子 Id（可由 <see cref="TryClick"/>+<see cref="CompleteDeferredMatchBarMerges"/> 提供；连环合并可能多于 2 个）。
         /// </summary>
         IReadOnlyList<int> LastMatchBarMergedAwayCellIds { get; }
+
+        /// <summary>
+        /// 上一次收纳栏点击已入栏，但尚在等待「飞入栏位落定」之后再执行抵消时（见 <see cref="CompleteDeferredMatchBarMerges"/>）为 true。
+        /// </summary>
+        bool PendingMatchBarMergeAfterFly { get; }
 
         LayeredGridCell GetCell(int id);
         bool CanClick(int cellId);
         LayeredMatchClickResult TryClick(int cellId);
+
+        /// <summary>
+        /// 在入栏动画结束后调用：若有挂起的抵消则执行并从栏移除，返回是否为抵消；否则保持原状返回 <see cref="LayeredMatchClickResult.MatchBarEnqueued"/>。
+        /// </summary>
+        LayeredMatchClickResult CompleteDeferredMatchBarMerges();
 
         /// <summary>收纳栏模式：撤回队尾最后一张入场牌放回棋盘。</summary>
         bool TryRevertLastMatchBarEntry();

@@ -473,6 +473,7 @@ MonoBehaviour:
   cardCellGap: 8
   offerMatchPlayStyleChoice: 1
   fallbackMatchPlayStyle: 0
+  levelViewPlayPickPanelName: play_mode_pick
   gameViewPlayPickPanelName: play_mode_pick
   playStylePickFallbackPopupName: 
   pickClassicPlayButtonPreferredName: 

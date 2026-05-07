@@ -69,7 +69,7 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     float cardCellGap = 8f;
 
-    [Tooltip("进入对局前是否让玩家选择「双点消除」或「收纳栏」玩法；若在 game_view 中找不到可选 UI，则退回 fallback")]
+    [Tooltip("是否允许玩家在选关页的 level_view（优先）或对局页的 game_view（回退）选择「双点消除」或「收纳栏」；找不到 UI 则用 fallback")]
     [SerializeField]
     bool offerMatchPlayStyleChoice = true;
 
@@ -77,7 +77,11 @@ public sealed class GameUIManager : MonoBehaviour
     [SerializeField]
     MatchPlayStyle fallbackMatchPlayStyle = MatchPlayStyle.ClassicPairClick;
 
-    [Tooltip("game_view 下用于放置两个选项按钮的组件名（可默认隐藏）；留空则不使用内嵌面板")]
+    [Tooltip("level_view 下玩法切换面板：存在且含两个玩法按钮时在选关页切换，开局不再盖住棋盘")]
+    [SerializeField]
+    string levelViewPlayPickPanelName = "play_mode_pick";
+
+    [Tooltip("game_view 下用于放置两个选项按钮的组件名（无有效 level_view 玩法面板时使用）；留空则不使用内嵌面板")]
     [SerializeField]
     string gameViewPlayPickPanelName = "play_mode_pick";
 
@@ -146,6 +150,12 @@ public sealed class GameUIManager : MonoBehaviour
     LayeredMatchBoardBinder _boardBinder;
 
     readonly List<(GButton Button, EventCallback1 Handler)> _playPickHandlerRegs = new List<(GButton Button, EventCallback1 Handler)>();
+
+    readonly List<(GButton Button, EventCallback1 Handler)> _levelPlayPickHandlerRegs =
+        new List<(GButton Button, EventCallback1 Handler)>();
+
+    bool _levelViewPlayPickReady;
+    MatchPlayStyle _matchPlayStyleForNextBoard;
 
     GObject _floatingPlayPickRoot;
 
@@ -375,6 +385,7 @@ public sealed class GameUIManager : MonoBehaviour
         _levelUIView.Root.AddRelation(GRoot.inst, RelationType.Size);
 
         BindLevelList(_levelUIView);
+        BindLevelPlayPickIfPresent(_levelUIView);
         RefreshUnderlayVisibility();
     }
 
@@ -403,6 +414,77 @@ public sealed class GameUIManager : MonoBehaviour
         list.onClickItem.Add(_levelListClickHandler);
         list.numItems = _levelRowTagsOrdered.Count;
         RefreshLevelCellsVisuals(list);
+    }
+
+    void BindLevelPlayPickIfPresent(LevelUIView view)
+    {
+        UnbindLevelPlayPickHandlers();
+        _levelViewPlayPickReady = false;
+
+        if (view == null || view.Root.isDisposed)
+            return;
+
+        if (!string.IsNullOrEmpty(levelViewPlayPickPanelName))
+        {
+            GComponent panel = view.Root.GetChild(levelViewPlayPickPanelName)?.asCom;
+            if (panel != null && !offerMatchPlayStyleChoice)
+                panel.visible = false;
+        }
+
+        if (!offerMatchPlayStyleChoice)
+            return;
+
+        if (string.IsNullOrEmpty(levelViewPlayPickPanelName))
+            return;
+
+        GComponent anchor = view.Root.GetChild(levelViewPlayPickPanelName)?.asCom;
+        if (anchor == null)
+            return;
+
+        GButton classic = ResolvePlayPickButton(
+            anchor,
+            pickClassicPlayButtonPreferredName,
+            new[] { "btn_classic", "btn_double", "btn_pair", "mode_classic", "btn_mode_classic" });
+        GButton queue = ResolvePlayPickButton(
+            anchor,
+            pickQueuePlayButtonPreferredName,
+            new[] { "btn_queue", "btn_bar", "btn_matchbar", "mode_queue", "btn_mode_queue" });
+
+        if (classic == null || queue == null)
+        {
+            Debug.LogWarning("[GameUIManager] level_view 玩法选择缺少按钮，将尝试 game_view 内嵌面板或默认玩法。");
+            anchor.visible = false;
+            return;
+        }
+
+        anchor.visible = true;
+        _matchPlayStyleForNextBoard = fallbackMatchPlayStyle;
+
+        RegisterLevelPlayPickClick(classic, _ => SetLevelViewPlayPickStyle(MatchPlayStyle.ClassicPairClick));
+        RegisterLevelPlayPickClick(queue, _ => SetLevelViewPlayPickStyle(MatchPlayStyle.MatchBarQueue));
+        _levelViewPlayPickReady = true;
+    }
+
+    void SetLevelViewPlayPickStyle(MatchPlayStyle style)
+    {
+        _matchPlayStyleForNextBoard = style;
+    }
+
+    void RegisterLevelPlayPickClick(GButton btn, EventCallback1 handler)
+    {
+        btn.onClick.Add(handler);
+        _levelPlayPickHandlerRegs.Add((btn, handler));
+    }
+
+    void UnbindLevelPlayPickHandlers()
+    {
+        for (int i = 0; i < _levelPlayPickHandlerRegs.Count; i++)
+        {
+            (GButton button, EventCallback1 handler) = _levelPlayPickHandlerRegs[i];
+            button?.onClick.Remove(handler);
+        }
+
+        _levelPlayPickHandlerRegs.Clear();
     }
 
     /// <summary>非虚拟列表在 <see cref="GList.numItems"/> 不变时不会重绑 itemRenderer，通关后须显式刷新。</summary>
@@ -668,6 +750,9 @@ public sealed class GameUIManager : MonoBehaviour
             list.numItems = 0;
         }
 
+        UnbindLevelPlayPickHandlers();
+        _levelViewPlayPickReady = false;
+
         _levelUIView.Root.Dispose();
         _levelUIView = null;
         RefreshUnderlayVisibility();
@@ -774,6 +859,12 @@ public sealed class GameUIManager : MonoBehaviour
         if (!offerMatchPlayStyleChoice)
         {
             CompleteMatchBoardSetup(def, fallbackMatchPlayStyle);
+            return;
+        }
+
+        if (_levelViewPlayPickReady)
+        {
+            CompleteMatchBoardSetup(def, _matchPlayStyleForNextBoard);
             return;
         }
 
