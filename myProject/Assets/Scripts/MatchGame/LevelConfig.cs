@@ -65,7 +65,7 @@ namespace VitaMj.MatchGame
             try
             {
                 def = MatchLevelDefinitionFromJson.Create(row.contentJson);
-                _ = new ConfiguredPairMatchGame(def);
+                _ = new ConfiguredPairMatchGame(def, MatchPlayStyle.ClassicPairClick);
                 definition = def;
                 return true;
             }

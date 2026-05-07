@@ -25,6 +25,12 @@ namespace VitaMj.MatchGame
         /// <summary>与 <c>timeLimitSeconds</c> 同义，便于在 content JSON 里写 <c>\"time\": 60</c>。</summary>
         public int time;
 
+        /// <summary>收纳栏最多容纳几张（与 <see cref="queueMax"/> 同义）。0 表示不用收纳栏。</summary>
+        public int queueMaxSlots;
+
+        /// <summary>与 <c>queueMaxSlots</c> 同义，便于在 JSON 里写 <c>\"queueMax\": 7</c>。</summary>
+        public int queueMax;
+
         public MatchLevelCardRowJson[] cards;
     }
 
@@ -76,6 +82,7 @@ namespace VitaMj.MatchGame
             target.valueMax = dto.valueMax;
             target.randomSeed = dto.randomSeed;
             target.timeLimitSeconds = ResolveTimeLimitSeconds(dto);
+            target.queueMaxSlots = ResolveQueueMaxSlots(dto);
 
             target.cards ??= new List<MatchLevelCardRow>();
             target.cards.Clear();
@@ -121,6 +128,15 @@ namespace VitaMj.MatchGame
             if (dto.timeLimitSeconds > 0)
                 return dto.timeLimitSeconds;
             return dto.time > 0 ? dto.time : 0;
+        }
+
+        static int ResolveQueueMaxSlots(MatchLevelDefinitionJson dto)
+        {
+            if (dto == null)
+                return 0;
+            if (dto.queueMaxSlots > 0)
+                return dto.queueMaxSlots;
+            return dto.queueMax > 0 ? dto.queueMax : 0;
         }
     }
 }
